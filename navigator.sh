@@ -15,7 +15,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Script directory (assumes this script is in the root of your repo)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts"
 
 # Function to print colored output
 print_color() {
@@ -189,64 +189,51 @@ show_category_menu() {
 
         echo
         print_color $YELLOW "Options:"
-        echo "  v) Open script"
+        echo "  o) Open script (in default editor)"
+        echo "  r) Open README/docs (in default app)"
+        echo "  f) View script directory (in file explorer)"
         echo "  b) Back to categories"
         echo "  q) Quit"
-        echo "  e) Explore script, or read the README"
         echo
 
         read -p "Enter your choice: " choice
 
         case $choice in
-        r | R)
-            read -p "Enter script number to run: " script_num
-            if [[ "$script_num" =~ ^[0-9]+$ ]] && [[ $script_num -ge 1 ]] && [[ $script_num -le ${#scripts[@]} ]]; then
-                execute_script "$category" "${scripts[$((script_num - 1))]}"
-                read -p "Press Enter to continue..."
-            else
-                print_color $RED "Invalid script number"
-                read -p "Press Enter to continue..."
-            fi
-            ;;
         o | O)
-            read -p "Enter script number to open README: " script_num
-            if [[ "$script_num" =~ ^[0-9]+$ ]] && [[ $script_num -ge 1 ]] && [[ $script_num -le ${#scripts[@]} ]]; then
-                open_readme_in_explorer "$category" "${scripts[$((script_num - 1))]}"
-            else
-                print_color $RED "Invalid script number"
-                read -p "Press Enter to continue..."
-            fi
-            ;;
-        v | V)
             read -p "Enter script number to open: " script_num
             if [[ "$script_num" =~ ^[0-9]+$ ]] && [[ $script_num -ge 1 ]] && [[ $script_num -le ${#scripts[@]} ]]; then
                 script_path="$SCRIPT_DIR/$category/${scripts[$((script_num - 1))]}"
+                print_color $GREEN "Opening script: ${scripts[$((script_num - 1))]}"
                 open_in_file_explorer "$script_path"
             else
                 print_color $RED "Invalid script number"
                 read -p "Press Enter to continue..."
             fi
             ;;
-
-        b | B)
-            return
+        r | R)
+            print_color $GREEN "Opening README for category: $category"
+            open_readme_in_explorer "$category" ""
             ;;
-        q | Q)
-            print_color $GREEN "Goodbye!"
-            exit 0
-            ;;
-        e | E)
-            read -p "Enter script number to explore: " script_num
+        f | F)
+            read -p "Enter script number to view directory: " script_num
             if [[ "$script_num" =~ ^[0-9]+$ ]] && [[ $script_num -ge 1 ]] && [[ $script_num -le ${#scripts[@]} ]]; then
                 script_path="$SCRIPT_DIR/$category/${scripts[$((script_num - 1))]}"
                 dir_path=$(dirname "$script_path")
+                print_color $GREEN "Opening directory: $dir_path"
                 open_in_file_explorer "$dir_path"
             else
                 print_color $RED "Invalid script number"
                 read -p "Press Enter to continue..."
             fi
             ;;
-
+        b | B)
+            return
+            ;;
+        q | Q)
+            echo
+            print_color $GREEN "Goodbye! 👋"
+            exit 0
+            ;;
         *)
             print_color $RED "Invalid choice"
             read -p "Press Enter to continue..."
@@ -303,6 +290,7 @@ open_readme_in_explorer() {
     done
 
     if [[ -n "$readme_file" ]]; then
+        print_color $GREEN "Opening README: $readme_file"
         open_in_file_explorer "$readme_file"
     else
         print_color $YELLOW "No README found in $category folder."
