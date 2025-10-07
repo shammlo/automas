@@ -1,2 +1,4 @@
-2025-10-02 10:48:30|CREATE_FILE|existing-file.txt
-2025-10-02 10:49:06|CREATE_FILE|existing-file2.txt
+2025-10-07 10:39:05|CREATE_FILE|cancel-undo.txt
+2025-10-07 10:39:05|CREATE_FILE|dry-undo.txt
+2025-10-07 10:39:05|CREATE_FILE|first.txt
+2025-10-07 10:39:05|CREATE_FILE|second.txt
