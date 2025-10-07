@@ -2,7 +2,7 @@
 
 Tired of manually creating nested directories and files like some kind of digital caveman using basic `mkdir` and `touch` commands? Meet **f-create.sh "The Rocket"**! 🦕➡️🚀
 
-This isn't just any ordinary Bash script – it's a **SUPERCHARGED** evolution from our simple "Zen Master" (`f-create-simplified.sh`)! It's a file creation wizard that's smarter than your average bear! 🐻🧠 It magically detects whether you're creating a **file** or a **folder**, gives you colorful feedback with more emojis than a teenager's text messages, and comes with enough features to make even the most demanding developers weep tears of joy! 😭✨
+This isn't just any ordinary Bash script, it's a **SUPERCHARGED** evolution from our simple "Zen Master" (`f-create-simplified.sh`)! It's a file creation wizard that's smarter than your average bear! 🐻🧠 It magically detects whether you're creating a **file** or a **folder**, gives you colorful feedback with more emojis than a teenager's text messages, and comes with enough features to make even the most demanding developers weep tears of joy! 😭✨
 
 **Evolution Timeline:**
 
@@ -11,8 +11,6 @@ This isn't just any ordinary Bash script – it's a **SUPERCHARGED** evolution f
 - 🚀 **The Rocket**: `f-create.sh` (full-featured powerhouse!)
 
 **What makes The Rocket so special?** Oh boy, where do we even start... 🎪
-
----
 
 ## 🚀 Features (The Full Monty)
 
@@ -29,8 +27,6 @@ This isn't just any ordinary Bash script – it's a **SUPERCHARGED** evolution f
 - 🔧 Permission setting (chmod on steroids)
 - 🎉 Colorful output + emojis (terminal happiness guaranteed)
 - 🧪 Comprehensive test suite (27 tests and counting!)
-
----
 
 ## 💻 Installation
 
@@ -106,8 +102,6 @@ test-create                      # Should run the test suite
 - `touch++` for the nostalgic
 - `magic` for the dramatic
 - `duck` for the... ducks? 🦆
-
----
 
 ## 🛠️ Usage Examples (Prepare to Be Amazed)
 
@@ -240,8 +234,6 @@ Do you want to undo this operation? (y/N): y
 ℹ️ [DRY RUN] Would undo: CREATE_DIR test-dir
 ```
 
----
-
 ## 🧘‍♂️ Want Something Simpler? (The Zen Master for Minimalists)
 
 If all these Rocket features make your head spin and you just want the basics, we've got you covered! 🧘‍♂️
@@ -298,8 +290,6 @@ For those who believe "less is more" and just want to create files and folders w
 | Test Suite           | ❌            | ✅            |
 
 Choose your fighter: **🚀 The Rocket** (the Swiss Army knife) or **🧘‍♂️ The Zen Master** (the elegant katana)! ⚔️
-
----
 
 ## 🧪 Testing (Because We're Not Savages)
 
@@ -370,8 +360,6 @@ Failed: 0
 - ✅ Error handling & edge cases
 - ✅ Help system
 
----
-
 ## 🎯 Command Reference (Your Cheat Sheet)
 
 | Command           | Description                   | Example                               |
@@ -386,8 +374,6 @@ Failed: 0
 | `--quiet`, `-q`   | Minimal output                | `./script file.txt --quiet`           |
 | `--verbose`, `-v` | Detailed output               | `./script file.txt --verbose`         |
 | `--undo`, `-u`    | Undo last operation           | `./script --undo`                     |
-
----
 
 ## 🎪 Advanced Wizardry
 
@@ -419,8 +405,6 @@ Failed: 0
 
 5. **Path Validation**: The script prevents dangerous operations (like `../../../etc/passwd`) 🚨
 
----
-
 ## 🐛 Troubleshooting (When Things Go Sideways)
 
 ### "No history file found"
@@ -442,8 +426,6 @@ Failed: 0
 
 - You're in interactive mode and need to answer y/N
 - Solution: Use `--dry-run` to preview, or pipe input: `echo "y" | ./script --undo` 🤖
-
----
 
 ## 📚 Understanding the History File (The Magic Behind Undo)
 
@@ -522,8 +504,6 @@ cp scripts/f-create/.f-create-history my-f-create-backup.txt
 
 **Pro Tip**: If you're curious about what you've been creating, just peek at the history file – it's like a timeline of your productivity! 📈
 
----
-
 ## 🤝 Contributing (Join the Fun!)
 
 Have an idea? Found a bug? Want to add more emojis?
@@ -541,8 +521,6 @@ Have an idea? Found a bug? Want to add more emojis?
 - **Humor is appreciated** – make us laugh! 😂
 - **Documentation updates** – if you add features, document them! 📚
 
----
-
 ## 📄 License
 
 This script is licensed under the **MIT License**.
@@ -550,14 +528,10 @@ See the [LICENSE](../../LICENSE) file for details.
 
 **TL;DR**: Do whatever you want with it, just don't blame us if your computer gains sentience and starts creating files on its own! 🤖👻
 
----
-
 ## 🎭 Final Words
 
 Remember: Life's too short for manual file creation! Let the wizard handle it while you focus on more important things... like arguing about tabs vs spaces! 🥊
 
 **May your directories be nested and your files be blessed!** 🙏✨
-
----
 
 _P.S. If this script doesn't make you smile at least once, you might need to check if you still have a soul. We accept no responsibility for existential crises caused by excessive automation._ 😈💀
