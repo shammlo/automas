@@ -3,8 +3,6 @@
 Welcome to **automas**, my growing collection of scripts that do all the boring stuff so I don’t have to.  
 Think of it as my personal army of little robots, each one living in its own folder, each one with a job to do.
 
----
-
 ## 📂 Structure
 
 Every script has:
@@ -39,8 +37,6 @@ automas/
 
 ```
 
----
-
 ## 🧭 Navigator (just for fun)
 
 Want to feel like you’re hacking into the Matrix? Use the built-in **Script Navigator CLI**:
@@ -58,8 +54,6 @@ What it does:
 
 _(Pro tip: If it breaks, don’t panic. That’s part of the fun.)_
 
----
-
 ## 🛠️ Scripts
 
 Here’s the lineup of my minions:
@@ -70,8 +64,6 @@ Here’s the lineup of my minions:
 
 _(More to come, because my laziness is infinite.)_
 
----
-
 ## 🚀 Usage
 
 1. Pick a script.
@@ -79,20 +71,14 @@ _(More to come, because my laziness is infinite.)_
 3. Run it.
 4. Brag about how productive you are now.
 
----
-
 ## ⚠️ Disclaimer
 
 These scripts work on **my machine™**.  
 If they break yours… consider it character development.
 
----
-
 ## 🎉 Contribute?
 
 This is mostly for me, but if you have ideas, fixes, or just want to make the code less embarrassing, PRs are welcome.
-
----
 
 ## 📄 License
 
