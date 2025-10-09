@@ -1,4 +1,6 @@
 #!/bin/bash
+#
+# Description: Comprehensive test suite for f-create.sh with 32 test cases covering all functionality
 
 # Comprehensive Test Suite for f-create.sh
 # Tests all features, options, and edge cases

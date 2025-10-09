@@ -1,4 +1,6 @@
 #!/bin/bash
+#
+# Description: Smart file and directory creator with auto-content, templates, and undo functionality
 
 # Colors and emojis for better output
 RED='\033[0;31m'

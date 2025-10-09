@@ -1,4 +1,6 @@
 #!/bin/bash
+#
+# Description: Simplified version of f-create with basic file and directory creation functionality
 
 # Colors and emojis for better output
 RED='\033[0;31m'
