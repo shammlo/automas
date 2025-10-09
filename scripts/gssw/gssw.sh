@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+#
+# Description: Git commit signing setup wizard for SSH and GPG key configuration
 set -e
 
 # -----------------------------
