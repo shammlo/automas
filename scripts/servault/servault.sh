@@ -16,7 +16,11 @@ BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # Script version
-readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_VERSION="2.1.0"
+
+# Configuration file path
+readonly CONFIG_DIR="$HOME/.servault"
+readonly CONFIG_FILE="$CONFIG_DIR/config"
 
 # Configuration - Multi-user support with vault mapping
 # Format: environment -> vault_name OR environment:user -> vault_name
@@ -72,6 +76,108 @@ command_exists() {
 }
 
 #######################################
+# Create config directory if it doesn't exist
+#######################################
+ensure_config_dir() {
+    if [ ! -d "$CONFIG_DIR" ]; then
+        mkdir -p "$CONFIG_DIR"
+    fi
+}
+
+#######################################
+# Read configuration file
+#######################################
+read_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        # Source the config file to load variables
+        . "$CONFIG_FILE"
+    fi
+}
+
+#######################################
+# Write configuration file
+#######################################
+write_config() {
+    local password_manager="$1"
+    
+    ensure_config_dir
+    
+    cat > "$CONFIG_FILE" << EOF
+# SERVAULT Configuration
+# Generated on $(date)
+PASSWORD_MANAGER=$password_manager
+EOF
+    
+    print_color "$GREEN" "✅ Configuration saved to $CONFIG_FILE"
+}
+
+#######################################
+# Detect available password managers
+#######################################
+detect_available_password_managers() {
+    local available=()
+    
+    if command_exists op; then
+        available+=("1password")
+    fi
+    
+    if command_exists bw; then
+        available+=("bitwarden")
+    fi
+    
+    echo "${available[@]}"
+}
+
+#######################################
+# Get configured password manager
+#######################################
+get_password_manager() {
+    local override="$1"
+    
+    # Check for command line override first
+    if [ -n "$override" ]; then
+        case "$override" in
+            "op"|"1password")
+                echo "1password"
+                return
+                ;;
+            "bw"|"bitwarden")
+                echo "bitwarden"
+                return
+                ;;
+            *)
+                print_color "$RED" "❌ Invalid password manager: $override"
+                print_color "$YELLOW" "💡 Valid options: 1password, bitwarden, op, bw"
+                exit 1
+                ;;
+        esac
+    fi
+    
+    # Read from config file
+    read_config
+    
+    if [ -n "${PASSWORD_MANAGER:-}" ]; then
+        echo "$PASSWORD_MANAGER"
+        return
+    fi
+    
+    # Auto-detect if no config
+    local available
+    available=($(detect_available_password_managers))
+    
+    if [ ${#available[@]} -eq 0 ]; then
+        print_color "$RED" "❌ No password manager found"
+        print_color "$YELLOW" "💡 Please install 1Password CLI or Bitwarden CLI"
+        exit 1
+    elif [ ${#available[@]} -eq 1 ]; then
+        echo "${available[0]}"
+    else
+        # Both available, prefer 1Password
+        echo "1password"
+    fi
+}
+
+#######################################
 # Detect operating system
 #######################################
 detect_os() {
@@ -124,18 +230,31 @@ show_installation_commands() {
     esac
     
     echo
-    print_color "$YELLOW" "For 1Password CLI:"
+    print_color "$YELLOW" "For Password Manager CLIs:"
     case "$os_type" in
         "ubuntu")
+            print_color "$CYAN" "   # 1Password CLI"
             print_color "$CYAN" "   curl -sS https://downloads.1password.com/linux/keys/1password.asc | sudo gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg"
             print_color "$CYAN" "   echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/amd64 stable main' | sudo tee /etc/apt/sources.list.d/1password.list"
             print_color "$CYAN" "   sudo apt update && sudo apt install 1password-cli"
+            echo
+            print_color "$CYAN" "   # Bitwarden CLI"
+            print_color "$CYAN" "   sudo apt install nodejs npm jq"
+            print_color "$CYAN" "   npm install -g @bitwarden/cli"
             ;;
         "macos")
+            print_color "$CYAN" "   # 1Password CLI"
             print_color "$CYAN" "   brew install 1password-cli"
+            echo
+            print_color "$CYAN" "   # Bitwarden CLI"
+            print_color "$CYAN" "   brew install bitwarden-cli jq"
             ;;
         *)
+            print_color "$CYAN" "   # 1Password CLI"
             print_color "$CYAN" "   Visit: https://developer.1password.com/docs/cli/get-started/"
+            echo
+            print_color "$CYAN" "   # Bitwarden CLI"
+            print_color "$CYAN" "   npm install -g @bitwarden/cli"
             ;;
     esac
 }
@@ -214,13 +333,26 @@ prompt_auto_install() {
 validate_dependencies() {
     local use_main="$1"
     local connect_db="$2"
+    local pm="$3"
     local missing_deps=()
     local missing_optional=()
     
-    # Check core dependencies
-    if ! command_exists op; then
-        missing_deps+=("1Password CLI (op)")
-    fi
+    # Check password manager dependency
+    case "$pm" in
+        "1password")
+            if ! command_exists op; then
+                missing_deps+=("1Password CLI (op)")
+            fi
+            ;;
+        "bitwarden")
+            if ! command_exists bw; then
+                missing_deps+=("Bitwarden CLI (bw)")
+            fi
+            if ! command_exists jq; then
+                missing_deps+=("jq (JSON processor)")
+            fi
+            ;;
+    esac
     
     if ! command_exists sshpass; then
         missing_deps+=("sshpass")
@@ -244,18 +376,18 @@ validate_dependencies() {
         echo
         show_installation_commands
         
-        # Only prompt for auto-install if it's not 1Password CLI (more complex install)
-        local has_op_missing=false
+        # Only prompt for auto-install if it's not password manager CLI (more complex install)
+        local has_pm_missing=false
         for dep in "${missing_deps[@]}"; do
-            if [[ "$dep" == *"1Password CLI"* ]]; then
-                has_op_missing=true
+            if [[ "$dep" == *"1Password CLI"* ]] || [[ "$dep" == *"Bitwarden CLI"* ]]; then
+                has_pm_missing=true
                 break
             fi
         done
         
-        if [ "$has_op_missing" = true ]; then
+        if [ "$has_pm_missing" = true ]; then
             echo
-            print_color "$YELLOW" "Note: 1Password CLI requires manual installation. Please install it first, then run the script again."
+            print_color "$YELLOW" "Note: Password manager CLIs require manual installation. Please install them first, then run the script again."
             exit 1
         else
             prompt_auto_install
@@ -296,6 +428,58 @@ signin_1password() {
 }
 
 #######################################
+# Sign in to Bitwarden
+#######################################
+signin_bitwarden() {
+    print_color "$BLUE" "🔐 Checking Bitwarden authentication..."
+    
+    # Check if already authenticated
+    local status
+    status=$(bw status 2>/dev/null | jq -r '.status' 2>/dev/null || echo "unauthenticated")
+    
+    if [ "$status" = "unlocked" ]; then
+        print_color "$GREEN" "✅ Already authenticated to Bitwarden"
+        return 0
+    elif [ "$status" = "locked" ]; then
+        print_color "$BLUE" "🔐 Unlocking Bitwarden vault..."
+        local session
+        session=$(bw unlock --raw 2>/dev/null)
+        if [ $? -eq 0 ] && [ -n "$session" ]; then
+            export BW_SESSION="$session"
+            print_color "$GREEN" "✅ Bitwarden vault unlocked"
+            return 0
+        else
+            print_color "$RED" "❌ Failed to unlock Bitwarden vault"
+            exit 1
+        fi
+    else
+        print_color "$RED" "❌ Not logged in to Bitwarden"
+        print_color "$YELLOW" "💡 Please run 'bw login' first, then try again"
+        exit 1
+    fi
+}
+
+#######################################
+# Universal password manager authentication
+#######################################
+signin_password_manager() {
+    local pm="$1"
+    
+    case "$pm" in
+        "1password")
+            signin_1password
+            ;;
+        "bitwarden")
+            signin_bitwarden
+            ;;
+        *)
+            print_color "$RED" "❌ Unknown password manager: $pm"
+            exit 1
+            ;;
+    esac
+}
+
+#######################################
 # Get credentials from 1Password
 #######################################
 get_op_credentials() {
@@ -331,38 +515,93 @@ get_op_credentials() {
 }
 
 #######################################
-# Fast credential loading (batch approach like original script)
+# Get credentials from Bitwarden
 #######################################
-load_credentials() {
+get_bw_credentials() {
     local vault_name="$1"
+    local field_name="$2"
     
-    if [ "${fast_mode:-false}" = false ]; then
-        print_color "$BLUE" "📋 Loading credentials from '$vault_name'..."
-    fi
+    # Get the item from Bitwarden
+    local item_json
+    item_json=$(bw get item "$vault_name" 2>/dev/null)
     
-    # Load all credentials in one call (much faster)
-    local credentials
-    credentials=$(op item get "$vault_name" --field notesPlain 2>/dev/null)
-    
-    if [ -z "$credentials" ]; then
-        print_color "$RED" "❌ Failed to retrieve credentials from vault '$vault_name'"
-        print_color "$YELLOW" "💡 Make sure the 1Password item '$vault_name' exists and contains the required fields"
+    if [ -z "$item_json" ]; then
+        print_color "$RED" "❌ Failed to retrieve item '$vault_name' from Bitwarden"
+        print_color "$YELLOW" "💡 Make sure the Bitwarden item '$vault_name' exists"
         exit 1
     fi
     
-    # Parse all credentials at once (like original script)
-    USER=$(echo "$credentials" | grep "^SERVER_USER=" | cut -d'=' -f2-)
-    HOST=$(echo "$credentials" | grep "^SERVER_IP=" | cut -d'=' -f2-)
-    SERVER_PASSWORD=$(echo "$credentials" | grep "^SERVER_PASSWORD=" | cut -d'=' -f2-)
+    # Try to get from custom fields first
+    local value
+    value=$(echo "$item_json" | jq -r ".fields[]? | select(.name==\"$field_name\") | .value" 2>/dev/null)
     
-    DB_USER=$(echo "$credentials" | grep "^DB_USER=" | cut -d'=' -f2-)
-    DB_NAME=$(echo "$credentials" | grep "^DB_NAME=" | cut -d'=' -f2-)
-    DB_PASSWORD=$(echo "$credentials" | grep "^DB_PASSWORD=" | cut -d'=' -f2-)
-    DB_PORT=$(echo "$credentials" | grep "^DB_PORT=" | cut -d'=' -f2-)
-    DB_HOST=$(echo "$credentials" | grep "^DB_HOST=" | cut -d'=' -f2-)
+    if [ -z "$value" ] || [ "$value" = "null" ]; then
+        # Try to get from notes field (key=value format)
+        local notes
+        notes=$(echo "$item_json" | jq -r '.notes // ""' 2>/dev/null)
+        
+        if [ -n "$notes" ]; then
+            value=$(echo "$notes" | grep "^${field_name}=" | cut -d'=' -f2-)
+        fi
+    fi
     
-    MAIN_USER=$(echo "$credentials" | grep "^MAIN_USER=" | cut -d'=' -f2-)
-    MAIN_PASSWORD=$(echo "$credentials" | grep "^MAIN_PASSWORD=" | cut -d'=' -f2-)
+    if [ -z "$value" ] || [ "$value" = "null" ]; then
+        print_color "$RED" "❌ Credential '$field_name' not found in Bitwarden item '$vault_name'"
+        print_color "$YELLOW" "💡 Check that '$vault_name' contains field '$field_name' in custom fields or notes"
+        exit 1
+    fi
+    
+    echo "$value"
+}
+
+#######################################
+# Universal credential retrieval
+#######################################
+get_credentials() {
+    local vault_name="$1"
+    local field_name="$2"
+    local pm="$3"
+    
+    case "$pm" in
+        "1password")
+            get_op_credentials "$vault_name" "$field_name"
+            ;;
+        "bitwarden")
+            get_bw_credentials "$vault_name" "$field_name"
+            ;;
+        *)
+            print_color "$RED" "❌ Unknown password manager: $pm"
+            exit 1
+            ;;
+    esac
+}
+
+#######################################
+# Fast credential loading (universal approach)
+#######################################
+load_credentials() {
+    local vault_name="$1"
+    local pm="$2"
+    
+    if [ "${fast_mode:-false}" = false ]; then
+        print_color "$BLUE" "📋 Loading credentials from '$vault_name' using $pm..."
+    fi
+    
+    # Load server credentials
+    USER=$(get_credentials "$vault_name" "SERVER_USER" "$pm")
+    HOST=$(get_credentials "$vault_name" "SERVER_IP" "$pm")
+    SERVER_PASSWORD=$(get_credentials "$vault_name" "SERVER_PASSWORD" "$pm")
+    
+    # Load database credentials
+    DB_USER=$(get_credentials "$vault_name" "DB_USER" "$pm")
+    DB_NAME=$(get_credentials "$vault_name" "DB_NAME" "$pm")
+    DB_PASSWORD=$(get_credentials "$vault_name" "DB_PASSWORD" "$pm")
+    DB_PORT=$(get_credentials "$vault_name" "DB_PORT" "$pm")
+    DB_HOST=$(get_credentials "$vault_name" "DB_HOST" "$pm")
+    
+    # Load main user credentials
+    MAIN_USER=$(get_credentials "$vault_name" "MAIN_USER" "$pm")
+    MAIN_PASSWORD=$(get_credentials "$vault_name" "MAIN_PASSWORD" "$pm")
     
     # Set database system user (hardcoded for backward compatibility)
     DB_SYSTEM_USER="cardhouzz"
@@ -626,6 +865,46 @@ interactive_config() {
     print_color "$CYAN" "Let's configure SERVAULT for your project!"
     echo
     
+    # Password Manager Selection
+    print_color "$YELLOW" "🔐 Password Manager Configuration:"
+    echo
+    
+    local available
+    available=($(detect_available_password_managers))
+    
+    if [ ${#available[@]} -eq 0 ]; then
+        print_color "$RED" "❌ No password manager found!"
+        print_color "$YELLOW" "💡 Please install 1Password CLI or Bitwarden CLI first:"
+        print_color "$CYAN" "   • 1Password CLI: https://developer.1password.com/docs/cli/get-started/"
+        print_color "$CYAN" "   • Bitwarden CLI: npm install -g @bitwarden/cli"
+        exit 1
+    elif [ ${#available[@]} -eq 1 ]; then
+        local pm="${available[0]}"
+        print_color "$BLUE" "🔍 Found: ${pm^} CLI"
+        print_color "$GREEN" "✅ Using ${pm^} for credential storage"
+        write_config "$pm"
+    else
+        # Both available - let user choose
+        print_color "$BLUE" "🔍 Found multiple password managers:"
+        for pm in "${available[@]}"; do
+            print_color "$CYAN" "   ✅ ${pm^} CLI"
+        done
+        echo
+        print_color "$BLUE" "💡 Default: Using 1Password (recommended for best experience)"
+        read -p "Would you like to use Bitwarden instead? (y/N): " -n 1 -r
+        echo
+        
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            print_color "$GREEN" "✅ Using Bitwarden for credential storage"
+            write_config "bitwarden"
+        else
+            print_color "$GREEN" "✅ Using 1Password for credential storage"
+            write_config "1password"
+        fi
+    fi
+    
+    echo
+    
     # Show existing 1Password items if possible
     if command_exists op; then
         print_color "$YELLOW" "🔍 Your existing 1Password server items:"
@@ -817,6 +1096,7 @@ show_help() {
     echo "  --setup        Interactive configuration setup (change project prefix, etc.)"
     echo "  --list-users   Show available users for an environment"
     echo "  --fast         Fast mode (skip banner and extra output)"
+    echo "  --password-manager <pm>  Override password manager (1password, bitwarden, op, bw)"
     echo
     print_color "$BOLD" "EXAMPLES:"
     echo "  $0 uat                           # Connect to UAT server (default user)"
@@ -826,18 +1106,25 @@ show_help() {
     echo "  $0 uat --dry-run                 # Show UAT connection details"
     echo "  $0 --setup                       # Interactive setup (first-time configuration)"
     echo "  $0 uat --list-users              # Show available users for UAT"
+    echo "  $0 uat --password-manager bitwarden  # Use Bitwarden for this connection"
     echo
     print_color "$BOLD" "REQUIREMENTS:"
-    echo "  • 1Password CLI (op) installed and configured"
+    echo "  • Password Manager CLI: 1Password (op) OR Bitwarden (bw)"
     echo "  • sshpass installed for password authentication"
     echo "  • expect installed for interactive sessions (main user db access)"
-    echo "  • Valid 1Password items configured via --setup"
+    echo "  • jq installed (required for Bitwarden support)"
+    echo "  • Valid password manager items configured via --setup"
     echo "  • Credentials stored as individual fields OR in notes as key=value pairs"
     echo
     print_color "$BOLD" "MULTI-USER SUPPORT:"
     echo "  Configure multiple users per environment using --setup"
-    echo "  Each user can have their own 1Password vault item"
+    echo "  Each user can have their own password manager vault item"
     echo "  Use --user <name> to specify which user credentials to use"
+    echo
+    print_color "$BOLD" "PASSWORD MANAGER SUPPORT:"
+    echo "  Supports both 1Password and Bitwarden"
+    echo "  Auto-detects available password managers"
+    echo "  Use --password-manager to override saved preference"
     echo
 }
 
@@ -918,6 +1205,7 @@ main() {
     local dry_run=false
     local list_users_flag=false
     local fast_mode=false
+    local password_manager_override=""
     
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
@@ -958,6 +1246,16 @@ main() {
             --fast)
                 fast_mode=true
                 shift
+                ;;
+            --password-manager|--pm)
+                if [ -n "${2:-}" ]; then
+                    password_manager_override="$2"
+                    shift 2
+                else
+                    print_color "$RED" "❌ --password-manager requires a value"
+                    print_color "$YELLOW" "💡 Valid options: 1password, bitwarden, op, bw"
+                    exit 1
+                fi
                 ;;
             uat|prod|staging|dev)
                 environment="$1"
@@ -1002,14 +1300,18 @@ main() {
     local vault_name
     vault_name=$(get_vault_name "$environment" "$user")
     
-    # Validate dependencies (pass use_main and connect_db for smart checking)
-    validate_dependencies "$use_main" "$connect_db"
+    # Determine which password manager to use
+    local password_manager
+    password_manager=$(get_password_manager "$password_manager_override")
     
-    # Sign in to 1Password
-    signin_1password
+    # Validate dependencies (pass use_main, connect_db, and password manager for smart checking)
+    validate_dependencies "$use_main" "$connect_db" "$password_manager"
+    
+    # Sign in to password manager
+    signin_password_manager "$password_manager"
     
     # Load credentials from vault
-    fast_mode="$fast_mode" load_credentials "$vault_name"
+    fast_mode="$fast_mode" load_credentials "$vault_name" "$password_manager"
     
     if [ "$dry_run" = true ]; then
         show_connection_details "$environment" "$user" "$vault_name" "$use_main" "$connect_db"
