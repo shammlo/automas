@@ -1,6 +1,6 @@
 # 🔐 SERVAULT - Secure Server Access Manager
 
-A powerful multi-user server login manager that integrates with 1Password to handle team server connections across multiple environments. Because remembering passwords is for people who enjoy living dangerously, and frankly, your production servers deserve better security than "password123" written on a sticky note under your keyboard (yes, we see you, Karen from accounting).
+A powerful multi-user server login manager that integrates with **1Password** and **Bitwarden** to handle team server connections across multiple environments. Because remembering passwords is for people who enjoy living dangerously, and frankly, your production servers deserve better security than "password123" written on a sticky note under your keyboard (yes, we see you, Karen from accounting).
 
 ## 🚀 **Quick Start for New Users**
 
@@ -26,14 +26,42 @@ chmod +x servault.sh
 
 ## 🎯 **Key Features:**
 
-- 👥 **Multi-User Support** - Multiple users per environment with separate 1Password vaults
-- 🗂️ **Multi-Vault Architecture** - Each user can have their own 1Password item
+- � **\*Dual Password Manager Support** - Works with both 1Password and Bitwarden (your choice!)
+- � **\*Multi-User Support** - Multiple users per environment with separate password manager vaults
+- 🗂️ **Multi-Vault Architecture** - Each user can have their own password manager item
 - 🎛️ **Stage-by-Stage Setup** - Configure environments one at a time with clear prompts
 - 🤖 **Auto-install dependencies** - Script can install missing tools automatically
 - ⚙️ **Interactive setup** - Configure project settings with prompts instead of editing code
-- 🔍 **Smart guidance** - Step-by-step instructions for everything
+- � **Ssmart guidance** - Step-by-step instructions for everything
 - 📋 **User Management** - Easy user listing and configuration per environment
 - ⚡ **Fast Mode** - Skip banner and verbose output for automation and quick access
+- 🔄 **Auto-Detection** - Automatically detects and uses available password managers
+
+---
+
+## � **Passtword Manager Support**
+
+SERVAULT works with both major password managers, giving you the flexibility to choose what works best for your team:
+
+### **🏆 1Password (Premium Experience)**
+
+- **Best for:** Teams with budget for premium tools
+- **Pros:** Excellent UX, robust CLI, great team features
+- **Setup:** Requires 1Password subscription + CLI installation
+
+### **🆓 Bitwarden (Free & Open Source)**
+
+- **Best for:** Budget-conscious teams, open-source advocates
+- **Pros:** Free tier available, open source, great community
+- **Setup:** Free account + CLI installation via npm
+
+### **🤖 Auto-Detection Magic**
+
+SERVAULT automatically detects which password manager you have installed:
+
+- **Both available?** Defaults to 1Password (but you can choose Bitwarden)
+- **Only one available?** Uses whatever you have
+- **Neither available?** Shows helpful installation instructions
 
 ---
 
@@ -41,7 +69,7 @@ chmod +x servault.sh
 
 This script provides secure server access with encrypted credential management:
 
-1. 🔐 **1Password Integration** - Retrieves credentials securely from your 1Password vault
+1. 🔐 **Password Manager Integration** - Retrieves credentials securely from 1Password or Bitwarden vaults
 2. 🖥️ **Multi-Environment Support** - Connects to UAT and production servers seamlessly
 3. 🗄️ **Database Access** - Direct PostgreSQL database connections through SSH tunnels
 4. 👤 **Multiple User Support** - Switch between standard and main user credentials
@@ -167,6 +195,10 @@ Direct PostgreSQL access through secure SSH tunnels:
 # Fast mode (minimal output, perfect for automation and impatient humans)
 ./servault.sh uat --fast
 ./servault.sh prod --user admin --fast db
+
+# Password manager override (because choice is beautiful)
+./servault.sh uat --password-manager bitwarden
+./servault.sh prod --pm bw --user admin db  # Short form works too
 ```
 
 ---
@@ -179,11 +211,14 @@ The script requires these tools to function properly. **Don't worry** - if you'r
 
 **Required Tools:**
 
-| Tool                   | Purpose                           | Why We Need It                                                        |
-| ---------------------- | --------------------------------- | --------------------------------------------------------------------- |
-| **1Password CLI (op)** | Secure credential retrieval       | Fetches passwords from encrypted 1Password vault                      |
-| **sshpass**            | Password-based SSH authentication | Automates SSH login without manual password typing                    |
-| **expect**             | Interactive session automation    | Handles complex server interactions (user switching, database access) |
+| Tool                       | Purpose                           | Why We Need It                                                        |
+| -------------------------- | --------------------------------- | --------------------------------------------------------------------- |
+| **Password Manager CLI**   | Secure credential retrieval       | Fetches passwords from encrypted vaults                               |
+| └── **1Password CLI (op)** | Premium option                    | Excellent UX, robust features                                         |
+| └── **Bitwarden CLI (bw)** | Free/open source option           | Budget-friendly, community-driven                                     |
+| **sshpass**                | Password-based SSH authentication | Automates SSH login without manual password typing                    |
+| **expect**                 | Interactive session automation    | Handles complex server interactions (user switching, database access) |
+| **jq** _(Bitwarden only)_  | JSON processing                   | Parses Bitwarden CLI JSON responses                                   |
 
 ### 🚀 **Easy Installation**
 
@@ -237,38 +272,84 @@ sudo apt update && sudo apt install 1password-cli
 brew install 1password-cli
 ```
 
-### 1Password Setup
+### Password Manager Item Setup
 
-Your 1Password vault needs items with configurable naming patterns. By default, the script looks for items named:
+Both password managers need items with configurable naming patterns. By default, the script looks for items named:
 
 - `uat server`
 - `prod server`
 - `staging server`
 - `dev server`
 
-**🔧 Customization**: Edit the script variables to match your naming convention:
+**🔧 Customization**: Use interactive setup to configure your naming convention:
 
 ```bash
-readonly DEFAULT_PROJECT_PREFIX="myproject"  # Optional prefix
-readonly DEFAULT_ITEM_SUFFIX="server"       # Item suffix
+./servault.sh --setup  # Guides you through the whole process!
 ```
 
-This would create patterns like: `myproject uat server`, `myproject prod server`, etc.
-
-#### Example 1Password Item: "uat server" (or "myproject uat server")
+#### 🏆 1Password Item Format
 
 **Option A: Individual Fields (Recommended)**
 
 ```
+Item Name: "uat server"
 Fields:
 - SERVER_USER: your_uat_username
+- SERVER_IP: 192.168.1.100
+- SERVER_PASSWORD: your_password
+- DB_USER: db_username
+- DB_NAME: your_database_name
+- DB_PASSWORD: database_password
+- DB_PORT: 5432
+- DB_HOST: localhost
+- MAIN_USER: main_username
+- MAIN_PASSWORD: main_user_password
+- DB_SYSTEM_USER: database_system_user (optional)
+```
+
+**Option B: Secure Notes**
+
+```
+Item Name: "uat server"
+Notes:
+SERVER_USER=your_uat_username
+SERVER_IP=192.168.1.100
+SERVER_PASSWORD=your_password
+DB_USER=db_username
 DB_NAME=your_database_name
 DB_PASSWORD=database_password
 DB_PORT=5432
 DB_HOST=localhost
 MAIN_USER=main_username
 MAIN_PASSWORD=main_user_password
-DB_SYSTEM_USER=database_system_user (optional)
+```
+
+#### 🆓 Bitwarden Item Format
+
+**Option A: Custom Fields (Recommended)**
+
+```
+Item Name: "uat server"
+Type: Secure Note
+Custom Fields:
+- SERVER_USER: your_uat_username
+- SERVER_IP: 192.168.1.100
+- SERVER_PASSWORD: your_password
+- DB_USER: db_username
+- etc...
+```
+
+**Option B: Notes Format**
+
+```
+Item Name: "uat server"
+Type: Secure Note
+Notes:
+SERVER_USER=your_uat_username
+SERVER_IP=192.168.1.100
+SERVER_PASSWORD=your_password
+DB_USER=db_username
+DB_NAME=your_database_name
 ```
 
 #### Required Credential Fields
@@ -314,22 +395,35 @@ chmod +x servault.sh
 
 **Ubuntu/Debian:**
 ```bash
+# Core dependencies
 sudo apt update
-sudo apt install sshpass expect
+sudo apt install sshpass expect jq
 
-# 1Password CLI
+# 1Password CLI (Premium option)
 curl -sS https://downloads.1password.com/linux/keys/1password.asc | sudo gpg --dearmor --output /usr/share/keyrings/1password-archive-keyring.gpg
 echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/amd64 stable main' | sudo tee /etc/apt/sources.list.d/1password.list
 sudo apt update && sudo apt install 1password-cli
+
+# OR Bitwarden CLI (Free option)
+sudo apt install nodejs npm
+npm install -g @bitwarden/cli
 ```
 
 **macOS:**
 ```bash
-brew install sshpass expect 1password-cli
+# Core dependencies
+brew install sshpass expect jq
+
+# 1Password CLI (Premium option)
+brew install 1password-cli
+
+# OR Bitwarden CLI (Free option)
+brew install bitwarden-cli
 ```
 
-### Setup 1Password CLI
+### Setup Your Password Manager
 
+**1Password Setup:**
 ```bash
 # Sign in to your 1Password account
 op account add
@@ -337,6 +431,20 @@ op account add
 # Verify it's working
 op vault list
 ```
+
+**Bitwarden Setup:**
+```bash
+# Log in to your Bitwarden account
+bw login
+
+# Unlock your vault (creates session)
+bw unlock
+
+# Verify it's working
+bw status
+```
+
+**Note:** SERVAULT will guide you through authentication during setup if needed!
 
 ### Make Script Executable
 
@@ -357,30 +465,49 @@ chmod +x servault.sh
 ./servault.sh --setup
 
 # Example interaction:
-# 📝 Project Configuration:
-# What's your project prefix? (e.g., 'myproject', 'acme', or leave empty for none)
-# Project prefix (optional): mycompany
+# � Passeword Manager Configuration:
+# 🔍 Found multiple password managers:
+#    ✅ 1Password CLI
+#    ✅ Bitwarden CLI
 #
-# What suffix do you want for 1Password items? (default: 'server')
-# Item suffix [server]:
+# 💡 Default: Using 1Password (recommended for best experience)
+# Would you like to use Bitwarden instead? (y/N): n
 #
-# 📋 Your 1Password item names will be:
-#   • UAT: 'mycompany uat server'
-#   • Production: 'mycompany prod server'
-#   • Staging: 'mycompany staging server'
-#   • Development: 'mycompany dev server'
+# ✅ Using 1Password for credential storage
+# 💾 Configuration saved to ~/.servault/config
+#
+# Now let's configure your environments...
+# Available stages: [1] dev  [2] uat  [3] prod  [4] staging
+# Select a stage to configure (1-4): 2
+#
+# Project name: mycompany
+# 1Password vault item name for uat: mycompany uat server
+```
+
+### �  Password Manager Override
+
+**Need to switch password managers temporarily?**
+
+```bash
+# Override saved preference for one command
+./servault.sh uat --password-manager bitwarden
+./servault.sh prod --pm bw --user admin db  # Short form
+
+# Check which password manager is configured
+./servault.sh --config
 ```
 
 ### 📋 View Current Configuration
 
 ```bash
-# Show current configuration and 1Password item names
+# Show current configuration and password manager setup
 ./servault.sh --config
 ```
 
 This displays:
-- Current project prefix and item suffix settings
-- Actual 1Password item names for each environment
+- Current password manager (1Password or Bitwarden)
+- Configured environments and users
+- Actual password manager item names for each environment
 - Required credential fields
 - Optional fields and their purposes
 
