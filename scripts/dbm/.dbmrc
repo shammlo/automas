@@ -1,0 +1,35 @@
+# Test configurations for all supported formats
+
+# Format 1: Password via PGPASSWORD env var (most secure)
+test_basic=test_user::5432:test_db
+
+# Format 2: Password in config (convenient but less secure)  
+test_password=test_user:test_pass:5432:test_db
+
+# Format 3: Custom host support
+test_host=test_user:test_pass:5432:test_db:remote.example.com
+
+# Format 4: SSL-enabled connection
+test_ssl=test_user:test_pass:5432:test_db:ssl.example.com:require
+
+# Format 5: SSL with client certificate
+test_ssl_cert=test_user:test_pass:5432:test_db:ssl.example.com:verify-full:/tmp/test.crt
+
+# Format 6: Full PostgreSQL URI
+test_uri=postgres://test_user:test_pass@uri.example.com:5432/test_db?sslmode=require
+
+# Format 7: PostgreSQL URI with SSL cert
+test_uri_ssl=postgres://test_user:test_pass@uri.example.com:5432/test_db?sslmode=require&sslcert=/tmp/test.crt
+
+# Format 8: Azure PostgreSQL format
+test_azure=postgres://username%40server:password@server.postgres.database.azure.com:5432/database?sslmode=require
+
+# Format 9: Legacy 3-part format (backward compatibility)
+test_legacy=test_user:5432:test_db
+
+# Invalid formats for testing error handling
+# invalid_format=invalid_config_line
+
+
+cardhouzz=cardhouzz:cardhouzz:5433:cardhouzz
+
