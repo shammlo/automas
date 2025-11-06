@@ -16,7 +16,7 @@ BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # Script version
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
 
 # Global variables
 INSTALL_OH_MY_ZSH=false
@@ -26,6 +26,12 @@ INSTALL_ZSH_PLUGINS=false
 ZSH_PLUGINS_SELECTED=""
 SELECTIONS=()
 
+# OS Detection - set once at startup
+IS_MACOS=false
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    IS_MACOS=true
+fi
+
 #######################################
 # Print colored output
 #######################################
@@ -33,6 +39,20 @@ print_color() {
     local color="$1"
     local message="$2"
     echo -e "${color}${message}${NC}"
+}
+
+#######################################
+# Cross-platform sed in-place editing
+#######################################
+sed_inplace() {
+    local pattern="$1"
+    local file="$2"
+    
+    if [ "$IS_MACOS" = true ]; then
+        sed -i '' "$pattern" "$file"
+    else
+        sed -i "$pattern" "$file"
+    fi
 }
 
 #######################################
@@ -149,12 +169,14 @@ install_zsh() {
     if [ "$INSTALL_OH_MY_ZSH" = true ]; then
         if [ ! -d "$HOME/.oh-my-zsh" ]; then
             show_progress "Installing Oh My Zsh..."
-            sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+            # Use RUNZSH=no to prevent automatic zsh execution
+            RUNZSH=no sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+            install_component "Oh My Zsh"
             
             # Set theme if specified
-            if [ -n "$ZSH_THEME" ] && [ "$ZSH_THEME" != "Default" ]; then
-                sed -i "s/ZSH_THEME=\"robbyrussell\"/ZSH_THEME=\"$ZSH_THEME\"/" "$HOME/.zshrc"
-                print_color "$CYAN" "  - Theme: $ZSH_THEME"
+            if [ -n "$ZSH_THEME" ] && [ "$ZSH_THEME" != "Default" ] && [ -f "$HOME/.zshrc" ]; then
+                sed_inplace "s/ZSH_THEME=\"robbyrussell\"/ZSH_THEME=\"$ZSH_THEME\"/" "$HOME/.zshrc"
+                print_color "$CYAN" "  - Theme set to: $ZSH_THEME"
             fi
         else
             print_color "$YELLOW" "⚠️  Oh My Zsh already installed, skipping."
@@ -171,60 +193,116 @@ install_zsh() {
         print_color "$YELLOW" "⚠️  Zsh is already your default shell."
     fi
 
-    # Install Zsh plugins
-    if [ "$INSTALL_ZSH_PLUGINS" = true ]; then
+    # Install Zsh plugins (only if Oh My Zsh is installed)
+    if [ "$INSTALL_ZSH_PLUGINS" = true ] && [ "$INSTALL_OH_MY_ZSH" = true ]; then
         declare -a PLUGINS_TO_ADD=()
         ZSH_CUSTOM=${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}
+        
+        # Ensure Oh My Zsh custom plugins directory exists
+        mkdir -p "$ZSH_CUSTOM/plugins"
         
         for plugin in $ZSH_PLUGINS_SELECTED; do
             case "$plugin" in
                 "Auto-Suggestions")
                     PLUGIN_PATH="$ZSH_CUSTOM/plugins/zsh-autosuggestions"
                     if [ ! -d "$PLUGIN_PATH" ]; then
-                        print_color "$BLUE" "📦 Installing zsh-autosuggestions..."
+                        show_progress "Installing zsh-autosuggestions..."
                         git clone https://github.com/zsh-users/zsh-autosuggestions.git "$PLUGIN_PATH"
+                        install_component "zsh-autosuggestions"
+                    else
+                        print_color "$YELLOW" "⚠️  zsh-autosuggestions already installed"
                     fi
                     PLUGINS_TO_ADD+=("zsh-autosuggestions")
                     ;;
                 "zsh-syntax-highlighting")
                     PLUGIN_PATH="$ZSH_CUSTOM/plugins/zsh-syntax-highlighting"
                     if [ ! -d "$PLUGIN_PATH" ]; then
-                        print_color "$BLUE" "📦 Installing zsh-syntax-highlighting..."
+                        show_progress "Installing zsh-syntax-highlighting..."
                         git clone https://github.com/zsh-users/zsh-syntax-highlighting.git "$PLUGIN_PATH"
+                        install_component "zsh-syntax-highlighting"
+                    else
+                        print_color "$YELLOW" "⚠️  zsh-syntax-highlighting already installed"
                     fi
                     PLUGINS_TO_ADD+=("zsh-syntax-highlighting")
                     ;;
                 "zsh-fast-syntax-highlighting")
-                    PLUGIN_PATH="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/fast-syntax-highlighting"
+                    PLUGIN_PATH="$ZSH_CUSTOM/plugins/fast-syntax-highlighting"
                     if [ ! -d "$PLUGIN_PATH" ]; then
-                        print_color "$BLUE" "📦 Installing fast-syntax-highlighting..."
+                        show_progress "Installing fast-syntax-highlighting..."
                         git clone https://github.com/zdharma-continuum/fast-syntax-highlighting.git "$PLUGIN_PATH"
+                        install_component "fast-syntax-highlighting"
+                    else
+                        print_color "$YELLOW" "⚠️  fast-syntax-highlighting already installed"
                     fi
                     PLUGINS_TO_ADD+=("fast-syntax-highlighting")
                     ;;
                 "zsh-autocomplete")
                     PLUGIN_PATH="$ZSH_CUSTOM/plugins/zsh-autocomplete"
                     if [ ! -d "$PLUGIN_PATH" ]; then
-                        print_color "$BLUE" "📦 Installing zsh-autocomplete..."
+                        show_progress "Installing zsh-autocomplete..."
                         git clone --depth 1 https://github.com/marlonrichert/zsh-autocomplete.git "$PLUGIN_PATH"
+                        install_component "zsh-autocomplete"
+                    else
+                        print_color "$YELLOW" "⚠️  zsh-autocomplete already installed"
                     fi
                     PLUGINS_TO_ADD+=("zsh-autocomplete")
                     ;;
             esac
-            install_component "Zsh Plugin: $plugin"
         done
 
         # Update .zshrc with plugins
-        if [ ${#PLUGINS_TO_ADD[@]} -gt 0 ]; then
+        if [ ${#PLUGINS_TO_ADD[@]} -gt 0 ] && [ -f "$HOME/.zshrc" ]; then
             # Create a backup of .zshrc
-            cp "$HOME/.zshrc" "$HOME/.zshrc.bak"
+            cp "$HOME/.zshrc" "$HOME/.zshrc.backup.$(date +%Y%m%d_%H%M%S)"
             
-            # Modify the plugins line in .zshrc
-            sed -i "/^plugins=/c\plugins=(git ${PLUGINS_TO_ADD[*]})" "$HOME/.zshrc"
+            # Check if plugins line exists and update it
+            if grep -q "^plugins=" "$HOME/.zshrc"; then
+                # Replace existing plugins line
+                sed_inplace "s/^plugins=.*/plugins=(git ${PLUGINS_TO_ADD[*]})/" "$HOME/.zshrc"
+            else
+                # Add plugins line if it doesn't exist
+                echo "plugins=(git ${PLUGINS_TO_ADD[*]})" >> "$HOME/.zshrc"
+            fi
             
-            print_color "$GREEN" "✅ Added plugins to .zshrc: ${PLUGINS_TO_ADD[*]}"
-            print_color "$YELLOW" "⚠️ You will need to restart your terminal or run 'zsh' to use the new plugins"
+            print_color "$GREEN" "✅ Added plugins to .zshrc: git ${PLUGINS_TO_ADD[*]}"
+            print_color "$CYAN" "💾 Backup created: ~/.zshrc.backup.$(date +%Y%m%d_%H%M%S)"
+            print_color "$YELLOW" "⚠️  You will need to restart your terminal or run 'exec zsh' to use the new plugins"
         fi
+    elif [ "$INSTALL_ZSH_PLUGINS" = true ] && [ "$INSTALL_OH_MY_ZSH" = false ]; then
+        print_color "$YELLOW" "⚠️  Plugins require Oh My Zsh. Skipping plugin installation."
+    fi
+
+    # Verify installation
+    if [ "$INSTALL_ZSH_PLUGINS" = true ] && [ "$INSTALL_OH_MY_ZSH" = true ]; then
+        echo
+        print_color "$BLUE" "🔍 Verifying plugin installation..."
+        
+        # Check if plugins are in .zshrc
+        if [ -f "$HOME/.zshrc" ] && grep -q "plugins=" "$HOME/.zshrc"; then
+            CONFIGURED_PLUGINS=$(grep "^plugins=" "$HOME/.zshrc" | sed 's/plugins=(//' | sed 's/)//')
+            print_color "$GREEN" "✅ Plugins configured in .zshrc: $CONFIGURED_PLUGINS"
+        else
+            print_color "$RED" "❌ No plugins found in .zshrc"
+        fi
+        
+        # Check if plugin directories exist
+        ZSH_CUSTOM=${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}
+        for plugin in $ZSH_PLUGINS_SELECTED; do
+            case "$plugin" in
+                "Auto-Suggestions")
+                    [ -d "$ZSH_CUSTOM/plugins/zsh-autosuggestions" ] && print_color "$GREEN" "✅ zsh-autosuggestions directory exists" || print_color "$RED" "❌ zsh-autosuggestions directory missing"
+                    ;;
+                "zsh-syntax-highlighting")
+                    [ -d "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting" ] && print_color "$GREEN" "✅ zsh-syntax-highlighting directory exists" || print_color "$RED" "❌ zsh-syntax-highlighting directory missing"
+                    ;;
+                "zsh-fast-syntax-highlighting")
+                    [ -d "$ZSH_CUSTOM/plugins/fast-syntax-highlighting" ] && print_color "$GREEN" "✅ fast-syntax-highlighting directory exists" || print_color "$RED" "❌ fast-syntax-highlighting directory missing"
+                    ;;
+                "zsh-autocomplete")
+                    [ -d "$ZSH_CUSTOM/plugins/zsh-autocomplete" ] && print_color "$GREEN" "✅ zsh-autocomplete directory exists" || print_color "$RED" "❌ zsh-autocomplete directory missing"
+                    ;;
+            esac
+        done
     fi
 
     print_color "$GREEN" "✅ Zsh setup completed successfully!"
