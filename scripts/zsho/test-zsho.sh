@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# Description: Test suite for zsho.sh script with validation and dry-run testing
+# Description: Comprehensive test suite for zsho.sh script with validation, 
+#              plugin testing, cross-platform compatibility, and error handling
 
 # Colors for test output
 RED='\033[0;31m'
@@ -198,7 +199,7 @@ test_safety_features() {
     fi
     
     test_start "Script has backup functionality"
-    if grep -q "\.bak" "$SCRIPT_PATH"; then
+    if grep -q "\.backup\." "$SCRIPT_PATH" || grep -q "\.bak" "$SCRIPT_PATH"; then
         test_pass "Script includes backup functionality"
     else
         test_fail "Script includes backup functionality" "No backup functionality found"
@@ -246,6 +247,273 @@ test_plugin_support() {
     else
         test_fail "zsh-autocomplete plugin supported" "Plugin not found in script"
     fi
+    
+    test_start "Script supports fast-syntax-highlighting"
+    if grep -q "fast-syntax-highlighting" "$SCRIPT_PATH"; then
+        test_pass "fast-syntax-highlighting plugin supported"
+    else
+        test_fail "fast-syntax-highlighting plugin supported" "Plugin not found in script"
+    fi
+}
+
+test_oh_my_zsh_integration() {
+    print_test_header "Oh My Zsh Integration Tests"
+    
+    test_start "Script includes Oh My Zsh installation"
+    if grep -q "ohmyzsh/ohmyzsh" "$SCRIPT_PATH"; then
+        test_pass "Oh My Zsh installation URL found"
+    else
+        test_fail "Oh My Zsh installation URL found" "Installation URL not found"
+    fi
+    
+    test_start "Script uses RUNZSH=no for non-interactive install"
+    if grep -q "RUNZSH=no" "$SCRIPT_PATH"; then
+        test_pass "Non-interactive Oh My Zsh installation"
+    else
+        test_fail "Non-interactive Oh My Zsh installation" "RUNZSH=no not found"
+    fi
+    
+    test_start "Script supports theme configuration"
+    if grep -q "ZSH_THEME=" "$SCRIPT_PATH"; then
+        test_pass "Theme configuration supported"
+    else
+        test_fail "Theme configuration supported" "Theme configuration not found"
+    fi
+    
+    test_start "Script includes popular themes"
+    local themes=("robbyrussell" "agnoster" "avit" "bira")
+    local themes_found=0
+    
+    for theme in "${themes[@]}"; do
+        if grep -q "$theme" "$SCRIPT_PATH"; then
+            ((themes_found++))
+        fi
+    done
+    
+    if [ $themes_found -ge 3 ]; then
+        test_pass "Popular themes included (found $themes_found)"
+    else
+        test_fail "Popular themes included" "Only found $themes_found themes"
+    fi
+}
+
+test_cross_platform_compatibility() {
+    print_test_header "Cross-Platform Compatibility Tests"
+    
+    test_start "Script handles macOS sed syntax"
+    if grep -q "darwin" "$SCRIPT_PATH" && grep -q "sed -i ''" "$SCRIPT_PATH"; then
+        test_pass "macOS sed syntax handled"
+    else
+        test_fail "macOS sed syntax handled" "macOS-specific sed syntax not found"
+    fi
+    
+    test_start "Script handles Linux sed syntax"
+    if grep -q "sed -i " "$SCRIPT_PATH"; then
+        test_pass "Linux sed syntax handled"
+    else
+        test_fail "Linux sed syntax handled" "Linux sed syntax not found"
+    fi
+    
+    test_start "Script detects package managers"
+    local package_managers=("apt" "yum" "dnf" "pacman" "brew")
+    local managers_found=0
+    
+    for manager in "${package_managers[@]}"; do
+        if grep -q "$manager" "$SCRIPT_PATH"; then
+            ((managers_found++))
+        fi
+    done
+    
+    if [ $managers_found -ge 4 ]; then
+        test_pass "Multiple package managers supported (found $managers_found)"
+    else
+        test_fail "Multiple package managers supported" "Only found $managers_found package managers"
+    fi
+}
+
+test_backup_and_safety() {
+    print_test_header "Backup and Safety Tests"
+    
+    test_start "Script creates timestamped backups"
+    if grep -q "backup.*date" "$SCRIPT_PATH"; then
+        test_pass "Timestamped backup creation"
+    else
+        test_fail "Timestamped backup creation" "Timestamped backup not found"
+    fi
+    
+    test_start "Script checks for existing installations"
+    if grep -q "already installed" "$SCRIPT_PATH"; then
+        test_pass "Existing installation checks"
+    else
+        test_fail "Existing installation checks" "Installation checks not found"
+    fi
+    
+    test_start "Script validates plugin directories"
+    if grep -q "mkdir -p.*plugins" "$SCRIPT_PATH"; then
+        test_pass "Plugin directory validation"
+    else
+        test_fail "Plugin directory validation" "Directory validation not found"
+    fi
+    
+    test_start "Script includes error handling for git operations"
+    if grep -q "git clone" "$SCRIPT_PATH" && grep -q "if.*-d" "$SCRIPT_PATH"; then
+        test_pass "Git operation error handling"
+    else
+        test_fail "Git operation error handling" "Git error handling not found"
+    fi
+}
+
+test_verification_features() {
+    print_test_header "Verification Feature Tests"
+    
+    test_start "Script includes installation verification"
+    if grep -q "Verifying.*installation" "$SCRIPT_PATH"; then
+        test_pass "Installation verification included"
+    else
+        test_fail "Installation verification included" "Verification not found"
+    fi
+    
+    test_start "Script checks plugin configuration in .zshrc"
+    if grep -q "grep.*plugins=" "$SCRIPT_PATH"; then
+        test_pass "Plugin configuration verification"
+    else
+        test_fail "Plugin configuration verification" "Configuration check not found"
+    fi
+    
+    test_start "Script verifies plugin directories exist"
+    if grep -q "directory exists" "$SCRIPT_PATH"; then
+        test_pass "Plugin directory verification"
+    else
+        test_fail "Plugin directory verification" "Directory verification not found"
+    fi
+}
+
+test_user_experience() {
+    print_test_header "User Experience Tests"
+    
+    test_start "Script provides clear progress messages"
+    if grep -q "show_progress" "$SCRIPT_PATH"; then
+        test_pass "Progress messages included"
+    else
+        test_fail "Progress messages included" "Progress function not found"
+    fi
+    
+    test_start "Script shows configuration summary"
+    if grep -q "Configuration Summary" "$SCRIPT_PATH"; then
+        test_pass "Configuration summary displayed"
+    else
+        test_fail "Configuration summary displayed" "Summary not found"
+    fi
+    
+    test_start "Script provides post-installation instructions"
+    if grep -q "restart your terminal" "$SCRIPT_PATH" || grep -q "exec zsh" "$SCRIPT_PATH"; then
+        test_pass "Post-installation instructions provided"
+    else
+        test_fail "Post-installation instructions provided" "Instructions not found"
+    fi
+    
+    test_start "Script includes useful command references"
+    if grep -q "Useful.*commands" "$SCRIPT_PATH"; then
+        test_pass "Command references included"
+    else
+        test_fail "Command references included" "Command references not found"
+    fi
+}
+
+test_plugin_installation_logic() {
+    print_test_header "Plugin Installation Logic Tests"
+    
+    test_start "Script only installs plugins with Oh My Zsh"
+    if grep -q "INSTALL_ZSH_PLUGINS.*true.*INSTALL_OH_MY_ZSH.*true" "$SCRIPT_PATH"; then
+        test_pass "Plugin installation requires Oh My Zsh"
+    else
+        test_fail "Plugin installation requires Oh My Zsh" "Dependency check not found"
+    fi
+    
+    test_start "Script handles plugin selection properly"
+    if grep -q "ZSH_PLUGINS_SELECTED" "$SCRIPT_PATH"; then
+        test_pass "Plugin selection handling"
+    else
+        test_fail "Plugin selection handling" "Plugin selection not found"
+    fi
+    
+    test_start "Script supports 'all' plugins option"
+    if grep -q "all.*plugins" "$SCRIPT_PATH"; then
+        test_pass "All plugins option supported"
+    else
+        test_fail "All plugins option supported" "All plugins option not found"
+    fi
+    
+    test_start "Script updates .zshrc with selected plugins"
+    if grep -q "plugins=(git" "$SCRIPT_PATH"; then
+        test_pass ".zshrc plugin configuration"
+    else
+        test_fail ".zshrc plugin configuration" "Plugin configuration not found"
+    fi
+}
+
+test_error_handling() {
+    print_test_header "Error Handling Tests"
+    
+    test_start "Script handles missing dependencies gracefully"
+    if grep -q "required but not installed" "$SCRIPT_PATH"; then
+        test_pass "Missing dependency error handling"
+    else
+        test_fail "Missing dependency error handling" "Dependency error messages not found"
+    fi
+    
+    test_start "Script handles unsupported OS gracefully"
+    if grep -q "currently supports.*only" "$SCRIPT_PATH"; then
+        test_pass "Unsupported OS error handling"
+    else
+        test_fail "Unsupported OS error handling" "OS error handling not found"
+    fi
+    
+    test_start "Script warns about plugins without Oh My Zsh"
+    if grep -q "Plugins require Oh My Zsh" "$SCRIPT_PATH"; then
+        test_pass "Plugin dependency warning"
+    else
+        test_fail "Plugin dependency warning" "Plugin warning not found"
+    fi
+    
+    test_start "Script handles existing installations gracefully"
+    if grep -q "already.*skipping" "$SCRIPT_PATH"; then
+        test_pass "Existing installation handling"
+    else
+        test_fail "Existing installation handling" "Existing installation messages not found"
+    fi
+}
+
+test_configuration_options() {
+    print_test_header "Configuration Options Tests"
+    
+    test_start "Script supports default shell configuration"
+    if grep -q "chsh -s" "$SCRIPT_PATH"; then
+        test_pass "Default shell configuration"
+    else
+        test_fail "Default shell configuration" "Shell change command not found"
+    fi
+    
+    test_start "Script checks current shell before changing"
+    if grep -q "CURRENT_SHELL" "$SCRIPT_PATH"; then
+        test_pass "Current shell detection"
+    else
+        test_fail "Current shell detection" "Shell detection not found"
+    fi
+    
+    test_start "Script provides interactive theme selection"
+    if grep -q "Select.*theme" "$SCRIPT_PATH"; then
+        test_pass "Interactive theme selection"
+    else
+        test_fail "Interactive theme selection" "Theme selection not found"
+    fi
+    
+    test_start "Script provides interactive plugin selection"
+    if grep -q "Select plugins" "$SCRIPT_PATH"; then
+        test_pass "Interactive plugin selection"
+    else
+        test_fail "Interactive plugin selection" "Plugin selection not found"
+    fi
 }
 
 #######################################
@@ -274,6 +542,14 @@ run_all_tests() {
     test_safety_features
     test_interactive_features
     test_plugin_support
+    test_oh_my_zsh_integration
+    test_cross_platform_compatibility
+    test_backup_and_safety
+    test_verification_features
+    test_user_experience
+    test_plugin_installation_logic
+    test_error_handling
+    test_configuration_options
     
     # Print summary
     echo ""
