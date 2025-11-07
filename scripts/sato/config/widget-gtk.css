@@ -1,0 +1,306 @@
+/* GTK3 CSS for Server Status Widget */
+
+/* Title styling */
+.widget-title {
+  color: #f1f5f9;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.widget-subtitle {
+  color: #94a3b8;
+  font-size: 14px;
+}
+
+/* Section titles */
+.section-title {
+  color: #94a3b8;
+  font-size: 16px;
+}
+
+/* Service items */
+.service-item {
+  background-color: rgba(40, 40, 44, 1);
+  border: 1px solid #222222;
+  border-radius: 7px;
+  padding: 14px;
+  margin: 2px;
+  margin-bottom: 50px;
+}
+
+.service-item:hover {
+  background-color: rgba(60, 60, 64, 1);
+  border-color: #444444;
+}
+
+.service-name {
+  color: #f1f5f9;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.service-response {
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+/* Status colors */
+.status-operational {
+  color: #10b981;
+  font-weight: bold;
+}
+
+.status-degraded {
+  color: #f59e0b;
+  font-weight: bold;
+}
+
+.status-down {
+  color: #ef4444;
+  font-weight: bold;
+}
+
+.status-checking {
+  color: #94a3b8;
+  font-weight: bold;
+}
+
+/* Buttons */
+button {
+  background-color: transparent;
+  border: none;
+  color: #94a3b8;
+  border-radius: 5px;
+  padding: 5px; /* Reduced padding to keep buttons compact */
+  min-width: 30px;
+  min-height: 30px;
+  font-size: 19px;
+}
+
+button:hover {
+  background-color: rgba(0, 106, 255, 0.8);
+  color: #f1f5f9;
+}
+
+/* Footer */
+.footer-label {
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.footer-status {
+  color: #10b981;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+/* Icons */
+.service-icon {
+  font-size: 16px;
+}
+
+.status-dot {
+  font-size: 12px;
+}
+.close-button:hover {
+  background-color: rgba(255, 0, 0, 0.8);
+  color: #f1f5f9;
+}
+.minimize-button:hover {
+  background-color: rgba(255, 255, 0, 0.829);
+  color: #f1f5f9;
+}
+
+.expand-button:hover {
+  background-color: rgba(123, 255, 0, 0.829);
+  color: #f1f5f9;
+}
+
+/* Network status indicators */
+.network-status {
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.network-connected {
+  color: #10b981;
+}
+
+.network-disconnected {
+  color: #ef4444;
+}
+
+/* ========== LIGHT THEME ========== */
+.light-theme .widget-title {
+  color: #131923;
+}
+
+.light-theme .widget-subtitle {
+  color: #64748b;
+}
+
+.light-theme .section-title {
+  color: #64748b;
+}
+
+.light-theme .service-item {
+  background-color: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+.light-theme .service-item:hover {
+  background-color: rgba(226, 232, 240, 0.8);
+}
+
+.light-theme .service-name {
+  color: #1e293b;
+}
+
+.light-theme .service-response {
+  color: #64748b;
+}
+
+.light-theme button {
+  color: #64748b;
+}
+
+.light-theme .footer-label {
+  color: #64748b;
+}
+
+.light-theme .footer-status {
+  color: #10b981;
+}
+
+.light-theme .network-connected {
+  color: #10b981;
+}
+
+.light-theme .network-disconnected {
+  color: #ef4444;
+}
+
+/* Keep original status colors in light theme */
+.light-theme .status-operational {
+  color: #10b981;
+}
+
+.light-theme .status-degraded {
+  color: #f59e0b;
+}
+
+.light-theme .status-down {
+  color: #ef4444;
+}
+
+.light-theme .status-checking {
+  color: #94a3b8;
+}
+
+/* Make container names darker in light theme for better visibility */
+.light-theme label {
+  color: #1f2937;
+}
+/* GTK3-compatible animations and transitions */
+.service-item {
+  transition: background-color 0.3s ease-in-out, border-color 0.3s ease-in-out;
+}
+
+.service-item:hover {
+  /* GTK3-compatible hover effects */
+  background-color: rgba(60, 60, 64, 1);
+  border-color: #555555;
+  border-width: 2px;
+}
+
+.status-dot {
+  transition: color 0.5s ease-in-out;
+}
+
+/* Enhanced hover effects for light theme */
+.light-theme .service-item:hover {
+  background-color: rgba(226, 232, 240, 1);
+  border-color: #cbd5e1;
+  border-width: 2px;
+}
+
+/* Compact mode styles */
+.compact-mode .service-item {
+  padding: 8px;
+  margin-bottom: 25px;
+}
+
+.compact-mode .service-name {
+  font-size: 14px;
+}
+
+.compact-mode .service-response {
+  font-size: 11px;
+}
+
+/* Dialog styles */
+.dialog-label {
+  color: #94a3b8;
+  font-weight: bold;
+}
+
+.dialog-section-title {
+  color: #f1f5f9;
+  font-size: 14px;
+  font-weight: bold;
+  margin-top: 10px;
+}
+
+.sparkline {
+  font-family: monospace;
+  font-size: 12px;
+  color: #10b981;
+  background-color: rgba(16, 185, 129, 0.1);
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+/* Keyboard shortcut indicators */
+.shortcut-hint {
+  color: #64748b;
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* Light theme overrides */
+.light-theme .widget-title {
+  color: #1e293b;
+}
+
+.light-theme .widget-subtitle {
+  color: #475569;
+}
+
+.light-theme .section-title {
+  color: #475569;
+}
+
+.light-theme .service-item {
+  background-color: rgba(248, 250, 252, 0.9);
+  border: 1px solid #e2e8f0;
+}
+
+.light-theme .service-item:hover {
+  background-color: rgba(241, 245, 249, 1);
+}
+
+.light-theme .service-name {
+  color: #1e293b;
+}
+
+.light-theme .service-response {
+  color: #475569;
+}
+
+.light-theme .dialog-label {
+  color: #475569;
+}
+
+.light-theme .dialog-section-title {
+  color: #1e293b;
+}
