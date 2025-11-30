@@ -1,0 +1,80 @@
+name: 🧑‍💻 Feature Request
+description: Suggest a new feature or enhancement for automas scripts
+title: "feat: "
+labels: ["🌟 enhancement"]
+body:
+  - type: dropdown
+    id: script
+    attributes:
+      label: Which script is this feature for?
+      description: Select the automas script you want to enhance
+      options:
+        - aetherix (Package Manager)
+        - sato (Smart Automation Tool)
+        - f-create (File/Folder Creator)
+        - dbm (Database Manager)
+        - ngx (Nginx Manager)
+        - zsho (Zsh Optimizer)
+        - servault (Server Vault Manager)
+        - gssw (Git SSH Switcher)
+        - navigator (Main Navigator)
+        - New Script Idea
+        - General/Multiple Scripts
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this feature solve?
+      description: Describe the use case or problem you're facing. Ex. "When managing multiple databases, I need to..."
+      placeholder: I'm always frustrated when...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe your proposed solution
+      description: What feature or enhancement would solve this problem?
+      placeholder: |
+        I'd like the script to...
+        - Feature 1
+        - Feature 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternative solutions considered
+      description: Have you considered any workarounds or alternative approaches?
+      placeholder: I've tried... but it doesn't work well because...
+    validations:
+      required: false
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: How important is this feature to you?
+      options:
+        - Nice to have
+        - Would improve my workflow
+        - Critical for my use case
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to help implement this feature
+          required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Add any other context, screenshots, or examples about the feature request
+      placeholder: Links to similar features, example commands, etc.
