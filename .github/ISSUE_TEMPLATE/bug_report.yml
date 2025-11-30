@@ -1,0 +1,126 @@
+name: 🐞 Bug Report
+description: Create a bug report to help us improve automas scripts
+title: "bug: "
+labels: ["🐞❔ unconfirmed bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the information below to help us fix it.
+
+  - type: dropdown
+    id: script
+    attributes:
+      label: Which script has the issue?
+      description: Select the script where you encountered the bug
+      options:
+        - Aetherix/Alchemy (Environment Setup)
+        - Sato (Server Monitoring)
+        - f-create (File Creation)
+        - ngx (Nginx Manager)
+        - zsho (Zsh Optimizer)
+        - servault (Server Vault)
+        - dbm (Database Manager)
+        - navigator.sh (Script Navigator)
+        - Other / Multiple Scripts
+    validations:
+      required: true
+
+  - type: input
+    id: script-version
+    attributes:
+      label: Script Version or Command
+      description: Which version or command did you use? (e.g., `./alchemy`, `./alchemy-features`, `python3 sato.py`)
+      placeholder: "./alchemy or python3 sato.py"
+    validations:
+      required: true
+
+  - type: textarea
+    id: bug-description
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of the bug, as well as what you expected to happen when encountering it.
+      placeholder: Tell us what went wrong...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Describe how to reproduce your bug. Steps, commands, configuration, etc.
+      placeholder: |
+        1. Run command '...'
+        2. Select option '...'
+        3. See error '...'
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected vs. Actual Behavior
+      description: What did you expect to happen? What actually happened?
+      placeholder: |
+        Expected: Script should install Docker successfully
+        Actual: Script failed with permission error
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or Error Messages
+      description: If applicable, please provide any error logs, stack traces, or console output
+      placeholder: Paste error messages or logs here...
+      render: shell
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Information
+      description: |
+        Please provide details about your environment:
+      value: |
+        - **OS**: (e.g., Ubuntu 22.04, Debian 11, Arch Linux)
+        - **Shell**: (e.g., bash, zsh)
+        - **Python Version** (if applicable): (e.g., 3.10.12)
+        - **Docker Version** (if applicable): (e.g., 24.0.5)
+        - **Installed via**: (e.g., git clone, download)
+    validations:
+      required: true
+
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Configuration Details
+      description: |
+        If relevant, share your configuration:
+        - For Aetherix: Component selections, preset used
+        - For Sato: Service configurations, monitoring settings
+        - For other scripts: Relevant settings or options
+      placeholder: |
+        Example:
+        - Selected components: Docker, Nginx, PostgreSQL
+        - Used preset: Full Stack Developer
+        - Custom configuration: Yes
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other information, screenshots, or context that may be helpful
+      placeholder: Any other details that might help us understand the issue...
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      description: Please confirm the following before submitting
+      options:
+        - label: I have searched existing issues to ensure this is not a duplicate
+          required: true
+        - label: I have provided all the requested information above
+          required: true
+        - label: I am using the latest version of the script
+          required: false
