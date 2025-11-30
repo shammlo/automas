@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📚 Documentation
+    url: https://github.com/yourusername/automas/tree/main/scripts
+    about: Check the documentation for each script in their respective folders
+  - name: 💬 Discussions
+    url: https://github.com/yourusername/automas/discussions
+    about: Ask questions and discuss ideas with the community
+  - name: 🚀 Roadmap
+    url: https://github.com/yourusername/automas/blob/main/scripts/aetherix/IMPROVEMENTS.md
+    about: View planned features and improvements for Aetherix
