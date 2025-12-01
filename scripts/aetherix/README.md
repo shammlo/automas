@@ -2,7 +2,14 @@
 
 > _"From the ethereal realm, Aetherix descends to forge the perfect development cosmos"_
 
-Aetherix is a powerful, modular system setup script that transforms bare Linux systems into fully-configured development environments through divine automation and cosmic precision. Think of it as Marie Kondo for your dev environment, but with more mystical powers and fewer folding tutorials.
+**Aetherix** is the project. **Alchemy** is the command.
+
+Transform bare Linux systems into fully-configured development environments through the power of cosmic alchemy. Think of it as Marie Kondo for your dev environment, but with more mystical powers and fewer folding tutorials.
+
+```bash
+./alchemy              # Transform your system
+./alchemy-features     # Enhanced transformation with resume & analytics
+```
 
 ## 🌌 What is Aetherix?
 
@@ -25,16 +32,24 @@ Tired of spending 3 hours setting up Docker only to realize you forgot to instal
 ## 🚀 Quick Start
 
 ```bash
-# Clone and enter the ethereal realm (or just cd into the folder like a normal person)
+# Enter the Aetherix realm
 cd scripts/aetherix
 
-# Invoke Aetherix (summon the digital gods)
-./aetherix.sh
+# Transform your system with alchemy
+./alchemy
 
-# Or with cosmic options (for when you want to feel fancy)
-./aetherix.sh --debug     # Enable mystical debugging (aka "why is this broken?")
-./aetherix.sh --dry-run   # Preview the divine plan (commitment issues? we got you)
-./aetherix.sh --help      # Seek guidance from the cosmos (RTFM, but prettier)
+# Or use the enhanced version with resume & analytics
+./alchemy-features
+
+# Cosmic options available
+./alchemy --debug        # Enable mystical debugging (aka "why is this broken?")
+./alchemy --dry-run      # Preview the transformation (commitment issues? we got you)
+./alchemy --help         # Seek guidance from the cosmos (RTFM, but prettier)
+
+# Enhanced features
+./alchemy-features --resume      # Resume interrupted installation
+./alchemy-features --interactive # Interactive component selection
+./alchemy-features --analytics   # View installation statistics
 ```
 
 ## ✨ Key Features
@@ -279,8 +294,12 @@ Track your installation history and performance metrics.
 - Performance trends
 - Failure analysis
 
-### **🎯 Which Version Should You Use?**
+### **🎯 Which Command Should You Use?**
 
-- **`aetherix.sh`** - Stable, production-ready modular version
-- **`aetherix_features.sh`** - Enhanced version with resume, analytics, and interactive features
-- **`cli.sh`** - Original monolithic version (reference only)
+- **`./alchemy`** - Standard transformation (stable, production-ready)
+- **`./alchemy-features`** - Enhanced transformation (resume, analytics, interactive selection)
+- **`./aetherix.sh`** - Same as alchemy (original script name)
+- **`./aetherix_features.sh`** - Same as alchemy-features (original script name)
+- **`./cli.sh`** - Original monolithic version (reference only)
+
+**Tip:** Use `alchemy` for the command, `Aetherix` for the project name!
