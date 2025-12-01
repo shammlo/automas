@@ -211,6 +211,42 @@ Throughout its evolution, Aetherix has maintained its core philosophy:
 
 From the original 953-line monolith to the current modular constellation, Aetherix continues to embody the principle that powerful tools can also be elegant and user-friendly.
 
+## 🎨 **The Dual-Name Strategy (Latest Evolution)**
+
+### **Aetherix + Alchemy: Best of Both Worlds**
+
+The latest evolution introduces a dual-name strategy that combines brand identity with practical usage:
+
+```bash
+# Aetherix = Project name (the brand, the cosmic story)
+# Alchemy = Command name (the tool, the transformation)
+
+./alchemy              # Transform your system
+./alchemy-features     # Enhanced transformation with resume & analytics
+
+# Original names still work (symlinks)
+./aetherix.sh          # Same as ./alchemy
+./aetherix_features.sh # Same as ./alchemy-features
+```
+
+### **Why This Works:**
+
+**Aetherix (Brand Identity):**
+
+- Unique, memorable, mystical
+- Cosmic Nicronian narrative
+- Documentation and story
+- Project folder name
+
+**Alchemy (Command Name):**
+
+- Easy to type and spell
+- Clear purpose (transformation)
+- Professional yet creative
+- Daily usage command
+
+**Result:** Users get a unique brand with a practical command. The mystical identity is preserved while making it easier to use and explain.
+
 ---
 
 **The evolution continues... May your development environment be ever cosmic! ✨**

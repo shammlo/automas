@@ -1,6 +1,32 @@
 # 🚀 Aetherix Changelog
 
-## Enhanced Version (aetherix_features.sh)
+## Latest: Dual-Name Strategy (Aetherix + Alchemy)
+
+### ✨ **New Command Names**
+
+#### **Alchemy Commands Added**
+
+- **`alchemy`** - Symlink to `aetherix.sh` (standard version)
+- **`alchemy-features`** - Symlink to `aetherix_features.sh` (enhanced version)
+
+#### **Why Dual Names?**
+
+- **Aetherix** - Project name (brand, story, documentation)
+- **Alchemy** - Command name (practical, clear, easy to use)
+- **Best of both worlds** - Unique identity + practical usage
+
+#### **Usage:**
+
+```bash
+./alchemy              # Transform your system
+./alchemy-features     # Enhanced transformation
+```
+
+**Note:** Original script names (`aetherix.sh`, `aetherix_features.sh`) still work perfectly!
+
+---
+
+## Enhanced Version (aetherix_features.sh / alchemy-features)
 
 ### ✨ **New Features Added**
 
