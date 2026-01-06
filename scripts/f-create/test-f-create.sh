@@ -400,10 +400,10 @@ test_undo_functionality() {
     # Test undo with no history
     local no_history_output
     no_history_output=$(../"$SCRIPT_PATH" "--undo" 2>&1)
-    if [[ "$no_history_output" == *"No history file found"* ]]; then
+    if [[ "$no_history_output" == *"No history file found"* ]] || [[ "$no_history_output" == *"No completed batch found"* ]]; then
         print_pass "Undo with no history"
     else
-        print_fail "Undo should report no history file"
+        print_fail "Undo should report no history file or no completed batch"
     fi
     
     # Create a file and test undo
@@ -476,15 +476,213 @@ test_undo_functionality() {
         print_fail "Failed to create test file for dry-run undo"
     fi
     
-    # Test multiple operations and undo order
-    run_test "Create multiple items for undo order test" "../$SCRIPT_PATH" "first.txt" "second.txt" "third-dir/" >/dev/null 2>&1
+    cd ..
+}
+
+test_batch_undo_functionality() {
+    print_test_header "Batch Undo Functionality Tests"
     
-    # Undo should remove the last created item (third-dir)
-    echo "y" | ../"$SCRIPT_PATH" "--undo" >/dev/null 2>&1
-    if ! dir_exists "third-dir" && file_exists "first.txt" && file_exists "second.txt"; then
-        print_pass "Undo order (last operation first)"
+    cleanup_test_dir
+    cd "$TEST_DIR"
+    
+    # Clean up any existing history file
+    rm -f "../scripts/f-create/.f-create-history"
+    
+    # Test 1: Batch creation and undo - mixed files and directories
+    print_test_case "Batch creation and undo (mixed files/dirs)"
+    if run_test "Create batch items" "../$SCRIPT_PATH" "batch_file1.txt" "batch_file2.js" "batch_dir1/" "batch_dir2/nested_file.py"; then
+        # Verify all items were created
+        local all_created=true
+        if ! file_exists "batch_file1.txt"; then all_created=false; print_info "Missing: batch_file1.txt"; fi
+        if ! file_exists "batch_file2.js"; then all_created=false; print_info "Missing: batch_file2.js"; fi
+        if ! dir_exists "batch_dir1"; then all_created=false; print_info "Missing: batch_dir1"; fi
+        if ! dir_exists "batch_dir2"; then all_created=false; print_info "Missing: batch_dir2"; fi
+        if ! file_exists "batch_dir2/nested_file.py"; then all_created=false; print_info "Missing: batch_dir2/nested_file.py"; fi
+        
+        if [ "$all_created" = true ]; then
+            # Now test batch undo
+            echo "y" | ../"$SCRIPT_PATH" "--undo" >/dev/null 2>&1
+            
+            # Verify all items were removed
+            local all_removed=true
+            if file_exists "batch_file1.txt"; then all_removed=false; print_info "Still exists: batch_file1.txt"; fi
+            if file_exists "batch_file2.js"; then all_removed=false; print_info "Still exists: batch_file2.js"; fi
+            if dir_exists "batch_dir1"; then all_removed=false; print_info "Still exists: batch_dir1"; fi
+            if dir_exists "batch_dir2"; then all_removed=false; print_info "Still exists: batch_dir2"; fi
+            if file_exists "batch_dir2/nested_file.py"; then all_removed=false; print_info "Still exists: batch_dir2/nested_file.py"; fi
+            
+            if [ "$all_removed" = true ]; then
+                print_pass "Batch undo removes entire batch"
+            else
+                print_fail "Batch undo did not remove all items"
+            fi
+        else
+            print_fail "Not all batch items were created"
+        fi
     else
-        print_fail "Undo should remove the most recent operation first"
+        print_fail "Batch creation command failed"
+    fi
+    
+    # Test 2: Multiple batches - undo should only affect last batch
+    print_test_case "Multiple batches - undo last batch only"
+    
+    # Create first batch
+    run_test "Create first batch" "../$SCRIPT_PATH" "first_batch_file.txt" "first_batch_dir/" >/dev/null 2>&1
+    
+    # Create second batch
+    run_test "Create second batch" "../$SCRIPT_PATH" "second_batch_file.txt" "second_batch_dir/" >/dev/null 2>&1
+    
+    # Verify both batches exist
+    if file_exists "first_batch_file.txt" && dir_exists "first_batch_dir" && 
+       file_exists "second_batch_file.txt" && dir_exists "second_batch_dir"; then
+        
+        # Undo should only remove the second batch
+        echo "y" | ../"$SCRIPT_PATH" "--undo" >/dev/null 2>&1
+        
+        # Check results
+        if file_exists "first_batch_file.txt" && dir_exists "first_batch_dir" && 
+           ! file_exists "second_batch_file.txt" && ! dir_exists "second_batch_dir"; then
+            print_pass "Undo affects only last batch"
+        else
+            print_fail "Undo should only remove the last batch"
+            print_info "First batch file exists: $(file_exists "first_batch_file.txt" && echo "yes" || echo "no")"
+            print_info "First batch dir exists: $(dir_exists "first_batch_dir" && echo "yes" || echo "no")"
+            print_info "Second batch file exists: $(file_exists "second_batch_file.txt" && echo "yes" || echo "no")"
+            print_info "Second batch dir exists: $(dir_exists "second_batch_dir" && echo "yes" || echo "no")"
+        fi
+    else
+        print_fail "Failed to create multiple batches for testing"
+    fi
+    
+    # Test 3: Batch undo dry-run
+    print_test_case "Batch undo dry-run mode"
+    
+    # Create a batch for dry-run testing
+    run_test "Create batch for dry-run test" "../$SCRIPT_PATH" "dryrun_file.txt" "dryrun_dir/" >/dev/null 2>&1
+    
+    if file_exists "dryrun_file.txt" && dir_exists "dryrun_dir"; then
+        # Test dry-run undo
+        local dry_output
+        dry_output=$(../"$SCRIPT_PATH" "--undo" "--dry-run" 2>&1)
+        
+        # Check that dry-run shows what would be undone but doesn't actually undo
+        if [[ "$dry_output" == *"[DRY RUN] Would undo entire batch"* ]] && 
+           file_exists "dryrun_file.txt" && dir_exists "dryrun_dir"; then
+            print_pass "Batch undo dry-run mode"
+        else
+            print_fail "Batch undo dry-run should show preview without making changes"
+            print_info "Dry-run output: $dry_output"
+        fi
+    else
+        print_fail "Failed to create batch for dry-run test"
+    fi
+    
+    # Test 4: Batch undo cancellation
+    print_test_case "Batch undo cancellation"
+    
+    # Create a batch for cancellation testing
+    run_test "Create batch for cancellation test" "../$SCRIPT_PATH" "cancel_file.txt" "cancel_dir/" >/dev/null 2>&1
+    
+    if file_exists "cancel_file.txt" && dir_exists "cancel_dir"; then
+        # Test undo cancellation (answer 'n')
+        echo "n" | ../"$SCRIPT_PATH" "--undo" >/dev/null 2>&1
+        
+        # Items should still exist after cancellation
+        if file_exists "cancel_file.txt" && dir_exists "cancel_dir"; then
+            print_pass "Batch undo cancellation preserves files"
+        else
+            print_fail "Batch undo cancellation should preserve all files"
+        fi
+    else
+        print_fail "Failed to create batch for cancellation test"
+    fi
+    
+    # Test 5: Complex nested structure batch undo
+    print_test_case "Complex nested structure batch undo"
+    
+    # Create complex nested structure in one batch
+    run_test "Create complex nested batch" "../$SCRIPT_PATH" \
+        "complex/deep/nested/file1.txt" \
+        "complex/deep/file2.js" \
+        "complex/another/branch/file3.py" \
+        "complex/simple_file.md" \
+        "complex/empty_dir/" >/dev/null 2>&1
+    
+    # Verify complex structure was created
+    if file_exists "complex/deep/nested/file1.txt" && 
+       file_exists "complex/deep/file2.js" && 
+       file_exists "complex/another/branch/file3.py" && 
+       file_exists "complex/simple_file.md" && 
+       dir_exists "complex/empty_dir"; then
+        
+        # Undo the entire complex batch
+        echo "y" | ../"$SCRIPT_PATH" "--undo" >/dev/null 2>&1
+        
+        # Check that everything was removed (including parent directories if empty)
+        if ! dir_exists "complex"; then
+            print_pass "Complex nested structure batch undo"
+        else
+            # Check what's left
+            local remaining_items=$(find complex -type f -o -type d 2>/dev/null | wc -l)
+            if [ "$remaining_items" -eq 1 ]; then  # Only the complex directory itself
+                print_pass "Complex nested structure batch undo (parent dir remains)"
+            else
+                print_fail "Complex nested structure not fully undone"
+                print_info "Remaining items in complex/: $(find complex 2>/dev/null | tr '\n' ' ')"
+            fi
+        fi
+    else
+        print_fail "Failed to create complex nested structure"
+    fi
+    
+    # Test 6: Single file batch (should still work with batch system)
+    print_test_case "Single file batch undo"
+    
+    run_test "Create single file batch" "../$SCRIPT_PATH" "single_batch_file.txt" >/dev/null 2>&1
+    
+    if file_exists "single_batch_file.txt"; then
+        echo "y" | ../"$SCRIPT_PATH" "--undo" >/dev/null 2>&1
+        
+        if ! file_exists "single_batch_file.txt"; then
+            print_pass "Single file batch undo"
+        else
+            print_fail "Single file batch should be undone"
+        fi
+    else
+        print_fail "Failed to create single file batch"
+    fi
+    
+    # Test 7: Verify batch ID uniqueness and history format
+    print_test_case "Batch ID uniqueness and history format"
+    
+    # Create two separate batches with small delay
+    run_test "Create first batch for ID test" "../$SCRIPT_PATH" "id_test1.txt" >/dev/null 2>&1
+    sleep 1  # Ensure different timestamps
+    run_test "Create second batch for ID test" "../$SCRIPT_PATH" "id_test2.txt" >/dev/null 2>&1
+    
+    # Check history file format
+    if [ -f "../scripts/f-create/.f-create-history" ]; then
+        local history_content=$(cat "../scripts/f-create/.f-create-history")
+        
+        # Check for batch markers and proper format
+        if [[ "$history_content" == *"BATCH_START"* ]] && 
+           [[ "$history_content" == *"BATCH_END"* ]] && 
+           [[ "$history_content" == *"batch_"* ]]; then
+            
+            # Count unique batch IDs
+            local unique_batches=$(grep "BATCH_START" "../scripts/f-create/.f-create-history" | cut -d'|' -f2 | sort -u | wc -l)
+            if [ "$unique_batches" -ge 2 ]; then
+                print_pass "Batch ID uniqueness and history format"
+            else
+                print_fail "Batch IDs should be unique"
+                print_info "Unique batches found: $unique_batches"
+            fi
+        else
+            print_fail "History file missing batch markers"
+            print_info "History content: $history_content"
+        fi
+    else
+        print_fail "History file not found"
     fi
     
     cd ..
@@ -564,6 +762,7 @@ main() {
     test_dry_run_mode
     test_quiet_verbose_modes
     test_undo_functionality
+    test_batch_undo_functionality
     test_error_handling
     
     # Cleanup
