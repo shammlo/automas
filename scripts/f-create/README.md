@@ -211,16 +211,72 @@ cat script.sh
 
 ### Undo Magic (Time Travel for Files!)
 
+#### Single Operation Undo
+
 ```bash
 # Oops, made a mistake!
 ./f-create.sh --undo
 ```
 
 ```
-ℹ️ Last operation: CREATE_FILE on 'oops.txt' at 2025-10-02 10:30:15
-Do you want to undo this operation? (y/N): y
+ℹ️ Found last batch: batch_20251215_103402_46816
+ℹ️ Batch contains 1 operations (originally 1 paths)
+ℹ️ Operations to undo:
+  - CREATE_FILE: oops.txt
+Do you want to undo this entire batch? (y/N): y
+⏳ Undoing: CREATE_FILE oops.txt
 ✅ Removed file: oops.txt
-✅ Undo completed successfully! 🎯
+✅ Batch undo completed: 1/1 operations successful! 🎯
+```
+
+#### Batch Undo (The Real Magic!)
+
+When you create multiple files/directories in one command, they're treated as a **batch**. Undo removes the **entire batch** at once!
+
+```bash
+# Create a batch of files and directories
+./f-create.sh file1.txt file2.js dir1/ dir2/nested.py
+
+# Undo the ENTIRE batch with one command
+./f-create.sh --undo
+```
+
+```
+ℹ️ Found last batch: batch_20251215_103402_46816
+ℹ️ Batch contains 5 operations (originally 4 paths)
+ℹ️ Operations to undo:
+  - CREATE_FILE: dir2/nested.py
+  - CREATE_DIR: dir2
+  - CREATE_DIR: dir1
+  - CREATE_FILE: file2.js
+  - CREATE_FILE: file1.txt
+Do you want to undo this entire batch? (y/N): y
+⏳ Undoing: CREATE_FILE dir2/nested.py
+✅ Removed file: dir2/nested.py
+⏳ Undoing: CREATE_DIR dir2
+✅ Removed directory: dir2
+⏳ Undoing: CREATE_DIR dir1
+✅ Removed directory: dir1
+⏳ Undoing: CREATE_FILE file2.js
+✅ Removed file: file2.js
+⏳ Undoing: CREATE_FILE file1.txt
+✅ Removed file: file1.txt
+✅ Batch undo completed: 5/5 operations successful! 🎯
+```
+
+#### Multiple Batches (Smart Undo)
+
+If you run multiple separate commands, each gets its own batch ID. Undo only affects the **last batch**:
+
+```bash
+# First batch
+./f-create.sh batch1_file.txt batch1_dir/
+
+# Second batch
+./f-create.sh batch2_file.txt batch2_dir/
+
+# Undo only removes the second batch!
+./f-create.sh --undo  # Only batch2_* items are removed
 ```
 
 ### Preview Undo (Paranoid Mode)
@@ -230,8 +286,13 @@ Do you want to undo this operation? (y/N): y
 ```
 
 ```
-ℹ️ Last operation: CREATE_DIR on 'test-dir' at 2025-10-02 10:25:30
-ℹ️ [DRY RUN] Would undo: CREATE_DIR test-dir
+ℹ️ Found last batch: batch_20251215_103402_46816
+ℹ️ Batch contains 3 operations (originally 2 paths)
+ℹ️ Operations to undo:
+  - CREATE_FILE: test-dir/file.txt
+  - CREATE_DIR: test-dir
+  - CREATE_FILE: simple.txt
+ℹ️ [DRY RUN] Would undo entire batch batch_20251215_103402_46816
 ```
 
 ## 🧘‍♂️ Want Something Simpler? (The Zen Master for Minimalists)
@@ -397,7 +458,7 @@ Failed: 0
 
 1. **Extensionless Files**: The script knows about `README`, `LICENSE`, `Dockerfile`, `Makefile`, `Gemfile`, `Procfile`, `Vagrantfile` – they're automatically treated as files! 🤓
 
-2. **Batch Undo**: Each operation is logged separately, so you can undo them one by one in reverse order! 🔄
+2. **Batch Undo**: Operations from the same command are grouped into batches with unique IDs. Undo removes the entire last batch at once! 🔄
 
 3. **Safety First**: Files are backed up before being removed during undo operations (check `[script-dir]/.f-create-backups/`) 🛡️
 
@@ -437,35 +498,40 @@ The `.f-create-history` file is a **log file** that tracks every single operatio
 
 **Location**: `[script-directory]/.f-create-history`
 
-### 📝 Format (Simple but Powerful)
+### 📝 Format (Enhanced with Batch Tracking)
 
 Each line follows this pattern:
 
 ```
-TIMESTAMP|OPERATION_TYPE|PATH
+TIMESTAMP|BATCH_ID|OPERATION_TYPE|PATH
 ```
 
 **Real example:**
 
 ```
-2025-10-02 10:30:15|CREATE_FILE|demo/awesome.txt
-2025-10-02 10:30:22|CREATE_DIR|projects/new-idea
-2025-10-02 10:30:35|CREATE_FILE|scripts/deploy.sh
+2025-12-15 10:34:02|batch_20251215_103402_46816|BATCH_START|4
+2025-12-15 10:34:02|batch_20251215_103402_46816|CREATE_FILE|demo/awesome.txt
+2025-12-15 10:34:02|batch_20251215_103402_46816|CREATE_DIR|projects/new-idea
+2025-12-15 10:34:02|batch_20251215_103402_46816|CREATE_FILE|scripts/deploy.sh
+2025-12-15 10:34:02|batch_20251215_103402_46816|BATCH_END|3/4
 ```
 
 ### 🔍 Operation Types
 
+- **`BATCH_START`** - Marks the beginning of a batch (with path count)
 - **`CREATE_FILE`** - When a file is created
 - **`CREATE_DIR`** - When a directory is created
+- **`BATCH_END`** - Marks the end of a batch (with success/total count)
 
-### 🔄 How Undo Uses It
+### 🔄 How Batch Undo Uses It
 
-1. **Reads the last line** to find the most recent operation
-2. **Shows you what will be undone** (timestamp, type, path)
-3. **Performs the reverse operation**:
+1. **Finds the last completed batch** by looking for the most recent `BATCH_END`
+2. **Collects all operations** from that batch ID
+3. **Shows you the entire batch** that will be undone
+4. **Performs reverse operations in reverse order**:
    - `CREATE_FILE` → Delete the file (with backup)
    - `CREATE_DIR` → Remove the directory (if empty)
-4. **Removes that line** from history (so you can undo multiple operations)
+5. **Removes the entire batch** from history (all lines with that batch ID)
 
 ### 🛡️ Safety Features
 
@@ -497,10 +563,12 @@ cp scripts/f-create/.f-create-history my-f-create-backup.txt
 ### 🎭 Fun Facts
 
 - 📊 Each operation gets a precise timestamp (down to the second)
+- 🆔 Each command gets a unique batch ID (timestamp + process ID)
 - 🔄 The file grows with each operation but stays lightweight
 - 🧹 No automatic cleanup – it's your permanent record!
 - 🚀 Works across different terminal sessions and directories
 - 🎯 Only tracks successful operations (failed attempts aren't logged)
+- 🎪 Batch markers help organize operations into logical groups
 
 **Pro Tip**: If you're curious about what you've been creating, just peek at the history file – it's like a timeline of your productivity! 📈
 
