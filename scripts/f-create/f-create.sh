@@ -27,6 +27,7 @@ INITIAL_CONTENT=""
 OPEN_EDITOR=false
 SET_PERMISSIONS=""
 UNDO_REQUESTED=false
+BATCH_ID=""
 
 # Known extensionless files
 EXTENSIONLESS_FILES=("README" "LICENSE" "CHANGELOG" "Dockerfile" "Makefile" "Vagrantfile" "Gemfile" "Procfile")
@@ -319,87 +320,205 @@ log_operation() {
     local path="$2"
     local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
     
-    echo "$timestamp|$operation|$path" >> "$HISTORY_FILE"
-    print_verbose "Logged operation: $operation $path"
+    echo "$timestamp|$BATCH_ID|$operation|$path" >> "$HISTORY_FILE"
+    print_verbose "Logged operation: $operation $path (batch: $BATCH_ID)"
 }
 
-# Function to undo last operation
+# Function to log batch start
+log_batch_start() {
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    local paths_count="$1"
+    
+    echo "$timestamp|$BATCH_ID|BATCH_START|$paths_count" >> "$HISTORY_FILE"
+    print_verbose "Started batch $BATCH_ID with $paths_count paths"
+}
+
+# Function to log batch end
+log_batch_end() {
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    local success_count="$1"
+    local total_count="$2"
+    
+    echo "$timestamp|$BATCH_ID|BATCH_END|$success_count/$total_count" >> "$HISTORY_FILE"
+    print_verbose "Ended batch $BATCH_ID: $success_count/$total_count successful"
+}
+
+# Function to undo last batch operation
 undo_last_operation() {
     if [ ! -f "$HISTORY_FILE" ]; then
         print_error "No history file found. Nothing to undo."
         return 1
     fi
     
-    local last_line=$(tail -n 1 "$HISTORY_FILE")
-    if [ -z "$last_line" ]; then
-        print_error "History file is empty. Nothing to undo."
+    # Find the last batch by looking for the most recent BATCH_END
+    local last_batch_id=""
+    local batch_operations=()
+    
+    # Read the file in reverse to find the last completed batch
+    if command -v tac >/dev/null 2>&1; then
+        # Use tac if available (reverse cat)
+        while IFS='|' read -r timestamp batch_id operation path; do
+            if [ "$operation" = "BATCH_END" ]; then
+                last_batch_id="$batch_id"
+                break
+            fi
+        done < <(tac "$HISTORY_FILE")
+    else
+        # Fallback: read entire file and process in reverse order
+        local lines=()
+        while IFS= read -r line; do
+            lines=("$line" "${lines[@]}")
+        done < "$HISTORY_FILE"
+        
+        for line in "${lines[@]}"; do
+            local timestamp=$(echo "$line" | cut -d'|' -f1)
+            local batch_id=$(echo "$line" | cut -d'|' -f2)
+            local operation=$(echo "$line" | cut -d'|' -f3)
+            local path=$(echo "$line" | cut -d'|' -f4)
+            
+            if [ "$operation" = "BATCH_END" ]; then
+                last_batch_id="$batch_id"
+                break
+            fi
+        done
+    fi
+    
+    if [ -z "$last_batch_id" ]; then
+        print_error "No completed batch found. Nothing to undo."
         return 1
     fi
     
-    local timestamp=$(echo "$last_line" | cut -d'|' -f1)
-    local operation=$(echo "$last_line" | cut -d'|' -f2)
-    local path=$(echo "$last_line" | cut -d'|' -f3)
+    print_info "Found last batch: $last_batch_id"
     
-    print_info "Last operation: $operation on '$path' at $timestamp"
+    # Collect all operations from this batch (in reverse order for proper undo)
+    local operations_to_undo=()
+    local batch_info=""
     
-    if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY RUN] Would undo: $operation $path"
+    if command -v tac >/dev/null 2>&1; then
+        while IFS='|' read -r timestamp batch_id operation path; do
+            if [ "$batch_id" = "$last_batch_id" ]; then
+                if [ "$operation" = "BATCH_START" ]; then
+                    batch_info="$path"
+                    break
+                elif [ "$operation" = "CREATE_FILE" ] || [ "$operation" = "CREATE_DIR" ]; then
+                    operations_to_undo+=("$operation|$path")
+                fi
+            fi
+        done < <(tac "$HISTORY_FILE")
+    else
+        # Fallback method
+        local lines=()
+        while IFS= read -r line; do
+            lines=("$line" "${lines[@]}")
+        done < "$HISTORY_FILE"
+        
+        for line in "${lines[@]}"; do
+            local timestamp=$(echo "$line" | cut -d'|' -f1)
+            local batch_id=$(echo "$line" | cut -d'|' -f2)
+            local operation=$(echo "$line" | cut -d'|' -f3)
+            local path=$(echo "$line" | cut -d'|' -f4)
+            
+            if [ "$batch_id" = "$last_batch_id" ]; then
+                if [ "$operation" = "BATCH_START" ]; then
+                    batch_info="$path"
+                    break
+                elif [ "$operation" = "CREATE_FILE" ] || [ "$operation" = "CREATE_DIR" ]; then
+                    operations_to_undo+=("$operation|$path")
+                fi
+            fi
+        done
+    fi
+    
+    if [ ${#operations_to_undo[@]} -eq 0 ]; then
+        print_warning "No operations found in batch $last_batch_id to undo."
         return 0
     fi
     
-    read -p "Do you want to undo this operation? (y/N): " -n 1 -r
+    print_info "Batch contains ${#operations_to_undo[@]} operations (originally $batch_info paths)"
+    
+    # Show what will be undone
+    print_info "Operations to undo:"
+    for op_info in "${operations_to_undo[@]}"; do
+        local operation=$(echo "$op_info" | cut -d'|' -f1)
+        local path=$(echo "$op_info" | cut -d'|' -f2)
+        echo "  - $operation: $path"
+    done
+    
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY RUN] Would undo entire batch $last_batch_id"
+        return 0
+    fi
+    
+    read -p "Do you want to undo this entire batch? (y/N): " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         print_info "Undo cancelled by user 🚫"
         return 0
     fi
     
-    case "$operation" in
-        "CREATE_FILE")
-            if [ -f "$path" ]; then
-                # Create backup before removing
-                if [ -d "$BACKUP_DIR" ]; then
-                    local backup_name="${BACKUP_DIR}/$(basename "$path").undo.$(date +"%Y%m%d_%H%M%S")"
-                    cp "$path" "$backup_name" 2>/dev/null && print_info "Backup created: $backup_name"
-                fi
-                
-                if rm "$path" 2>/dev/null; then
-                    print_success "Removed file: $path"
-                else
-                    print_error "Failed to remove file: $path"
-                    return 1
-                fi
-            else
-                print_warning "File not found: $path"
-            fi
-            ;;
-        "CREATE_DIR")
-            if [ -d "$path" ]; then
-                if rmdir "$path" 2>/dev/null; then
-                    print_success "Removed directory: $path"
-                else
-                    print_warning "Directory not empty or failed to remove: $path"
-                    print_info "Use 'rm -rf $path' to force removal if needed"
-                fi
-            else
-                print_warning "Directory not found: $path"
-            fi
-            ;;
-        *)
-            print_error "Unknown operation: $operation"
-            return 1
-            ;;
-    esac
+    # Perform undo operations
+    local undo_success=0
+    local undo_total=${#operations_to_undo[@]}
     
-    # Remove the last line from history
-    if command -v sed >/dev/null 2>&1; then
-        sed -i '$d' "$HISTORY_FILE" 2>/dev/null
+    for op_info in "${operations_to_undo[@]}"; do
+        local operation=$(echo "$op_info" | cut -d'|' -f1)
+        local path=$(echo "$op_info" | cut -d'|' -f2)
+        
+        print_progress "Undoing: $operation $path"
+        
+        case "$operation" in
+            "CREATE_FILE")
+                if [ -f "$path" ]; then
+                    # Create backup before removing
+                    if [ -d "$BACKUP_DIR" ]; then
+                        local backup_name="${BACKUP_DIR}/$(basename "$path").undo.$(date +"%Y%m%d_%H%M%S")"
+                        cp "$path" "$backup_name" 2>/dev/null && print_verbose "Backup created: $backup_name"
+                    fi
+                    
+                    if rm "$path" 2>/dev/null; then
+                        print_success "Removed file: $path"
+                        ((undo_success++))
+                    else
+                        print_error "Failed to remove file: $path"
+                    fi
+                else
+                    print_warning "File not found: $path"
+                    ((undo_success++))  # Count as success since it's already gone
+                fi
+                ;;
+            "CREATE_DIR")
+                if [ -d "$path" ]; then
+                    if rmdir "$path" 2>/dev/null; then
+                        print_success "Removed directory: $path"
+                        ((undo_success++))
+                    else
+                        print_warning "Directory not empty or failed to remove: $path"
+                        print_info "Use 'rm -rf $path' to force removal if needed"
+                    fi
+                else
+                    print_warning "Directory not found: $path"
+                    ((undo_success++))  # Count as success since it's already gone
+                fi
+                ;;
+        esac
+    done
+    
+    # Remove all lines belonging to this batch from history
+    if command -v grep >/dev/null 2>&1; then
+        grep -v "|$last_batch_id|" "$HISTORY_FILE" > "${HISTORY_FILE}.tmp" && mv "${HISTORY_FILE}.tmp" "$HISTORY_FILE"
     else
-        # Fallback for systems without sed -i
-        head -n -1 "$HISTORY_FILE" > "${HISTORY_FILE}.tmp" && mv "${HISTORY_FILE}.tmp" "$HISTORY_FILE"
+        # Fallback method
+        local temp_file="${HISTORY_FILE}.tmp"
+        > "$temp_file"
+        while IFS= read -r line; do
+            if [[ ! "$line" =~ \|$last_batch_id\| ]]; then
+                echo "$line" >> "$temp_file"
+            fi
+        done < "$HISTORY_FILE"
+        mv "$temp_file" "$HISTORY_FILE"
     fi
     
-    print_success "Undo completed successfully! 🎯"
+    print_success "Batch undo completed: $undo_success/$undo_total operations successful! 🎯"
     return 0
 }
 
@@ -559,6 +678,9 @@ main() {
         exit 1
     fi
     
+    # Generate unique batch ID for this operation
+    BATCH_ID="batch_$(date +%Y%m%d_%H%M%S)_$$"
+    
     # Show mode information
     if [ "$DRY_RUN" = true ]; then
         print_info "🔍 DRY RUN MODE - No actual changes will be made"
@@ -577,9 +699,14 @@ main() {
     local success_count=0
     local total_count=${#paths[@]}
     
+    # Log batch start (only if not dry run)
+    if [ "$DRY_RUN" != true ]; then
+        log_batch_start "$total_count"
+    fi
+    
     if [ ${#paths[@]} -gt 1 ]; then
         # Multiple paths - batch mode
-        print_info "Batch mode: Processing $total_count paths..."
+        print_info "Batch mode: Processing $total_count paths... (batch: $BATCH_ID)"
         echo
         
         for filepath in "${paths[@]}"; do
@@ -600,12 +727,18 @@ main() {
         
         print_info "Batch completed: $success_count/$total_count successful"
     else
-        # Single path
+        # Single path (still treated as a batch for undo consistency)
+        print_verbose "Single path mode (batch: $BATCH_ID)"
         if ! create_path_and_file "${paths[0]}"; then
             exit_code=1
         else
             success_count=1
         fi
+    fi
+    
+    # Log batch end (only if not dry run)
+    if [ "$DRY_RUN" != true ]; then
+        log_batch_end "$success_count" "$total_count"
     fi
     
     # Final message
