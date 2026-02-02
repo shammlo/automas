@@ -245,6 +245,23 @@ The script requires these tools to function properly. **Don't worry** - if you'r
 
 **Just type 'y' and the script installs everything for you!** 🎉
 
+### 🔐 **Password Manager Choice**
+
+SERVAULT supports both major password managers - choose what works for your team:
+
+| Password Manager | Cost      | Best For                           | Setup Complexity |
+| ---------------- | --------- | ---------------------------------- | ---------------- |
+| **1Password**    | Premium   | Teams with budget, excellent UX    | Medium           |
+| **Bitwarden**    | Free/Paid | Budget-conscious, open source fans | Easy             |
+
+**During setup, SERVAULT will:**
+
+1. **Auto-detect** which password managers you have installed
+2. **Recommend 1Password** if both are available (better UX)
+3. **Let you choose Bitwarden** if you prefer free/open source
+4. **Save your preference** for future use
+5. **Allow overrides** with `--password-manager` flag
+
 **Manual Installation (if you prefer):**
 
 **Ubuntu/Debian:**
