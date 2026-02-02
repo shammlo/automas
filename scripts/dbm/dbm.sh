@@ -46,6 +46,23 @@ load_project_configs() {
         done <"$PROJECT_CONFIG_FILE"
     else
         echo "⚠️  Config file $PROJECT_CONFIG_FILE not found — will fallback to environment variables."
+        
+        # Check if template exists and offer to create config file
+        local template_file="$SCRIPT_DIR/.dbmrc.template"
+        if [[ -f "$template_file" ]] && [[ -t 0 ]]; then  # Only prompt if running interactively
+            echo
+            echo "💡 Found template file. Would you like to create a config file from the template?"
+            echo "   This will copy .dbmrc.template to .dbmrc for you to customize."
+            read -p "Create config file? (y/N): " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                cp "$template_file" "$PROJECT_CONFIG_FILE"
+                echo "✅ Created $PROJECT_CONFIG_FILE from template"
+                echo "📝 Please edit $PROJECT_CONFIG_FILE with your actual database credentials"
+                echo "   Example: nano $PROJECT_CONFIG_FILE"
+                echo
+            fi
+        fi
     fi
 }
 
@@ -104,6 +121,7 @@ Syntax: dbm [--debug] <action> <project_name> [<file_path>] [options]
   check, c, -c     🔍 Test database connection (use --all for all projects)
   info, i, -i      📊 Show database information and statistics
   config           ⚙️  Manage project configurations (add/remove/edit)
+  init             🚀 Initialize configuration file from template
 
 📋 Global Options:
   --debug          🧪 Enable detailed debug output (shows connection details)
@@ -187,6 +205,7 @@ Syntax: dbm [--debug] <action> <project_name> [<file_path>] [options]
     export DUCK_HOST=localhost
 
 🎯 Quick Start:
+  0. Initialize config: 'dbm init' (creates .dbmrc from template)
   1. Add database projects: 'dbm config add mydb user:pass:5432:database'
   2. List available projects: 'dbm list'
   3. Test connections: 'dbm check --all'
@@ -803,6 +822,54 @@ info_database() {
 }
 
 # Configuration management functions
+init_config() {
+    local template_file="$SCRIPT_DIR/.dbmrc.template"
+    
+    if [[ -f "$PROJECT_CONFIG_FILE" ]]; then
+        echo "⚠️  Config file already exists: $PROJECT_CONFIG_FILE"
+        echo "   Use 'dbm config add <project> <config>' to add new projects"
+        echo "   Or remove the existing file first if you want to start fresh"
+        return 1
+    fi
+    
+    if [[ ! -f "$template_file" ]]; then
+        echo "❌ Template file not found: $template_file"
+        echo "   Creating a basic config file instead..."
+        echo "# DBM Configuration File" > "$PROJECT_CONFIG_FILE"
+        echo "# Format: project_name=user:password:port:database[:host[:ssl[:cert]]]" >> "$PROJECT_CONFIG_FILE"
+        echo "# Example: mydb=myuser:mypass:5432:mydatabase" >> "$PROJECT_CONFIG_FILE"
+        echo >> "$PROJECT_CONFIG_FILE"
+        echo "✅ Created basic config file: $PROJECT_CONFIG_FILE"
+        echo "📝 Please edit it with your database credentials"
+        return 0
+    fi
+    
+    echo "🚀 Initializing DBM configuration..."
+    echo "   Template: $template_file"
+    echo "   Config:   $PROJECT_CONFIG_FILE"
+    echo
+    
+    if [[ -t 0 ]]; then  # Interactive mode
+        read -p "Create config file from template? (Y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Nn]$ ]]; then
+            echo "❌ Initialization cancelled"
+            return 1
+        fi
+    fi
+    
+    cp "$template_file" "$PROJECT_CONFIG_FILE"
+    echo "✅ Created $PROJECT_CONFIG_FILE from template"
+    echo
+    echo "📝 Next steps:"
+    echo "   1. Edit the config file: nano $PROJECT_CONFIG_FILE"
+    echo "   2. Replace template values with your actual database credentials"
+    echo "   3. Test connection: dbm check <project_name>"
+    echo "   4. List projects: dbm list"
+    echo
+    echo "💡 Tip: Use 'dbm config add <name> <config>' to add projects via command line"
+}
+
 config_add() {
     local project_name="$1"
     local config_string="$2"
@@ -980,6 +1047,9 @@ dbm() {
         config)
             [[ $# -lt 1 ]] && error_exit "❌ 'config' action requires subcommand: add, remove, edit"
             config_management "$@"
+            ;;
+        init)
+            init_config
             ;;
         *)
             error_exit "❌ Invalid action '$action'. Use -h for help."
