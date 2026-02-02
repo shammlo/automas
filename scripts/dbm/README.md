@@ -32,6 +32,14 @@ DBM now supports **multiple flexible credential methods** for maximum security a
 
 Create `.dbmrc` in the DBM script folder with one of these **10 supported formats**:
 
+> **🔒 Security Note**: The `.dbmrc` file is ignored by git to protect your credentials.
+> Use the provided `.dbmrc.template` as a starting point:
+>
+> ```bash
+> cp .dbmrc.template .dbmrc
+> # Edit .dbmrc with your actual credentials
+> ```
+
 ```ini
 # Format 1: Password via PGPASSWORD env var (most secure)
 duck=duck_user::5432:duck_db
