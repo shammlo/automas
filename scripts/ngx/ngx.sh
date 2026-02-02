@@ -467,6 +467,62 @@ generate_ssl_certificate() {
 }
 
 #######################################
+# Check if domain exists in hosts file with exact match
+# Arguments:
+#   $1 - Domain name
+#   $2 - Hosts file path
+# Returns:
+#   0 if domain exists, 1 if it doesn't
+#######################################
+domain_exists_in_hosts() {
+    local domain="$1"
+    local hosts_file="$2"
+    
+    # Use grep with word boundaries and anchoring to ensure exact match
+    if grep -q "127\.0\.0\.1[[:space:]]\+${domain}$\|127\.0\.0\.1[[:space:]]\+${domain}[[:space:]]\+" "$hosts_file"; then
+        return 0  # Domain exists
+    else
+        return 1  # Domain doesn't exist
+    fi
+}
+
+#######################################
+# Update hosts file with domain
+# Arguments:
+#   $1 - Domain name
+#   $2 - Hosts file path
+#   $3 - Force update flag (0 or 1)
+# Returns:
+#   0 if successful
+#######################################
+update_hosts_file() {
+    local domain="$1"
+    local hosts_file="$2"
+    local force_update="${3:-0}"
+    
+    # Check if domain already exists in hosts file
+    if domain_exists_in_hosts "$domain" "$hosts_file"; then
+        if [ "$force_update" -eq 1 ]; then
+            log_info "Domain ${domain} exists in hosts file. Forcing update as requested."
+            # Remove existing entry (match exact domain)
+            sudo sed -i "/127\.0\.0\.1[[:space:]]\+${domain}$/d" "$hosts_file"
+            sudo sed -i "/127\.0\.0\.1[[:space:]]\+${domain}[[:space:]]\+/d" "$hosts_file"
+            # Add the domain to /etc/hosts
+            echo "127.0.0.1 ${domain}" | sudo tee -a "$hosts_file" >/dev/null
+            log_success "Updated ${domain} in hosts file."
+        else
+            log_info "Domain ${domain} already exists in hosts file. Skipping... (use --force to override)"
+        fi
+    else
+        # Add the domain to /etc/hosts
+        echo "127.0.0.1 ${domain}" | sudo tee -a "$hosts_file" >/dev/null
+        log_success "Added ${domain} to hosts file."
+    fi
+    
+    return 0
+}
+
+#######################################
 # Create Nginx configuration content
 # Arguments:
 #   $1 - Domain name
@@ -514,13 +570,17 @@ generate_nginx_config() {
     index index.html index.htm index.nginx-debian.html;
 "
     else
-        # HTTP only server block
+        # HTTP only server block - only add listen directive if custom port is specified
         config_content+="server {
-    listen $port;
-    server_name $domain www.$domain;
-    
-    root $doc_root;
+"
+        if [ "$port" != "80" ]; then
+            config_content+="    listen $port;
+"
+        fi
+        config_content+="    root $doc_root;
     index index.html index.htm index.nginx-debian.html;
+    
+    server_name $domain www.$domain;
 "
     fi
     
@@ -546,12 +606,22 @@ generate_nginx_config() {
     }
 "
     else
-        # Standard static file serving
-        config_content+="    
+        # Check if this looks like a SPA by examining the dist folder
+        if [ -f "$doc_root/index.html" ] && [ -d "$doc_root/assets" ]; then
+            # Likely a SPA build (has index.html and assets folder)
+            config_content+="    
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+"
+        else
+            # Standard static file serving
+            config_content+="    
     location / {
         try_files \$uri \$uri/ =404;
     }
 "
+        fi
     fi
     
     config_content+="}"
@@ -580,6 +650,17 @@ create_site() {
             if [ "${ENABLE_SSL:-0}" -eq 1 ]; then
                 log_info "DRY RUN: Would generate SSL certificate"
                 log_info "DRY RUN: Would configure HTTPS redirect"
+            fi
+            
+            # Check if domain would be added to hosts file
+            if domain_exists_in_hosts "$normalized_domain" "$HOSTS_FILE"; then
+                if [ "${FORCE_UPDATE:-0}" -eq 1 ]; then
+                    log_info "DRY RUN: Would update existing hosts file entry"
+                else
+                    log_info "DRY RUN: Domain already exists in hosts file (would skip)"
+                fi
+            else
+                log_info "DRY RUN: Would add domain to hosts file"
             fi
         fi
         
@@ -625,6 +706,10 @@ create_site() {
     echo "$nginx_config" | sudo tee "$config_file" > /dev/null
     
     log_success "Nginx configuration created: $config_file"
+    
+    # Update hosts file
+    log_info "Updating hosts file for $normalized_domain"
+    update_hosts_file "$normalized_domain" "$HOSTS_FILE" "${FORCE_UPDATE:-0}"
     
     # Test and reload nginx
     if sudo nginx -t; then
