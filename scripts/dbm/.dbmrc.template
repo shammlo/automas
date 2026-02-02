@@ -1,0 +1,49 @@
+# DBM Configuration Template
+# Copy this file to .dbmrc and fill in your actual credentials
+# 
+# IMPORTANT: .dbmrc is ignored by git to protect your credentials
+# Never commit actual credentials to the repository
+
+# Format: alias_name=username:password:port:database:host:ssl_mode:cert_path
+# Note: Empty password field (::) means use PGPASSWORD environment variable
+
+# Format 1: Password via PGPASSWORD env var (most secure)
+# Set PGPASSWORD=your_password in environment, leave password field empty
+my_dev_db=my_user::5432:my_database
+
+# Format 2: Password in config (convenient but less secure)  
+my_local_db=my_user:my_password:5432:my_database
+
+# Format 3: Custom host support (user:password:port:database:host)
+my_remote_db=my_user:my_password:5432:my_database:db.example.com
+
+# Format 4: SSL-enabled connection (user:password:port:database:host:ssl_mode)
+my_ssl_db=my_user:my_password:5432:my_database:ssl.example.com:require
+
+# Format 5: SSL with client certificate (user:password:port:database:host:ssl_mode:cert_path)
+my_ssl_cert_db=my_user:my_password:5432:my_database:ssl.example.com:verify-full:/path/to/client.crt
+
+# Format 6: Full PostgreSQL URI (alternative format)
+my_uri_db=postgres://my_user:my_password@uri.example.com:5432/my_database?sslmode=require
+
+# Format 7: PostgreSQL URI with SSL cert (alternative format)
+my_uri_ssl_db=postgres://my_user:my_password@uri.example.com:5432/my_database?sslmode=require&sslcert=/path/to/client.crt
+
+# Format 8: Azure PostgreSQL format (alternative format)
+my_azure_db=postgres://username%40server:password@server.postgres.database.azure.com:5432/database?sslmode=require
+
+# Format 9: Legacy 3-part format (user:port:database - password same as username)
+my_legacy_db=my_user:5432:my_database
+
+# Common examples:
+# Local development database
+# dev=dev_user:dev_pass:5432:dev_db
+
+# Production database (using environment variable for password)
+# prod=prod_user::5432:prod_db:prod.example.com:require
+
+# Testing database with custom port
+# test=test_user:test_pass:5433:test_db
+
+# Staging database with SSL
+# staging=staging_user:staging_pass:5432:staging_db:staging.example.com:require
