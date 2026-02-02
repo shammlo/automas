@@ -158,10 +158,18 @@ The script generates exactly what you need based on your flags. No bloat, no con
 
 ### 🌐 Intelligent Hosts Management
 
-- Adds your custom domain to `/etc/hosts` (telling your computer "hey, when someone asks for myapp.dev, just look in the mirror")
-- Prevents duplicates and handles updates gracefully
-- Use `--force` to override existing entries (for those "I know what I'm doing" moments)
-- Automatic cleanup when removing sites (no orphaned entries cluttering your hosts file)
+- **Automatic hosts file updates**: Adds your custom domain to `/etc/hosts` (telling your computer "hey, when someone asks for myapp.dev, just look in the mirror")
+- **Duplicate prevention**: Prevents duplicate entries and handles updates gracefully
+- **Force updates**: Use `--force` to override existing entries (for those "I know what I'm doing" moments)
+- **Clean removal**: Automatic cleanup when removing sites (no orphaned entries cluttering your hosts file)
+- **Smart detection**: Checks existing entries and shows what would be changed in dry-run mode
+
+**How it works:**
+
+- When creating a site, adds `127.0.0.1 yourdomain.tld` to `/etc/hosts`
+- When removing a site, cleans up the hosts file entry automatically
+- Respects existing entries unless `--force` is used
+- Shows hosts file operations in dry-run mode for transparency
 
 ---
 
