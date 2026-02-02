@@ -33,12 +33,14 @@ DBM now supports **multiple flexible credential methods** for maximum security a
 Create `.dbmrc` in the DBM script folder with one of these **10 supported formats**:
 
 > **🔒 Security Note**: The `.dbmrc` file is ignored by git to protect your credentials.
-> Use the provided `.dbmrc.template` as a starting point:
 >
-> ```bash
-> cp .dbmrc.template .dbmrc
-> # Edit .dbmrc with your actual credentials
-> ```
+> **🚀 Quick Setup Options:**
+>
+> 1. **Automatic**: Run `./dbm.sh init` to create from template
+> 2. **Manual**: Copy the template: `cp .dbmrc.template .dbmrc`
+> 3. **Interactive**: DBM will offer to create the file when first run
+>
+> Then edit `.dbmrc` with your actual credentials.
 
 ```ini
 # Format 1: Password via PGPASSWORD env var (most secure)
