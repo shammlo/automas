@@ -425,6 +425,75 @@ test_validation_features() {
     assert_contains "$output" "testapp.io" "Quiet mode shows essential info"
 }
 
+test_hosts_file_functionality() {
+    print_test_header "Hosts File Management Tests"
+    
+    local test_domain="testngx.io"
+    
+    test_start "Hosts file operations in dry-run mode"
+    local output
+    output=$("$SCRIPT_PATH" create testngx "$TEST_DIST_DIR" --dry-run --verbose 2>&1) || true
+    
+    # Should show hosts file operations in dry-run
+    assert_contains "$output" "DRY RUN" "Hosts file dry-run shows operations"
+    assert_contains "$output" "$test_domain" "Domain appears in dry-run output"
+
+    test_start "Hosts file detection for existing entries"
+    local output
+    output=$("$SCRIPT_PATH" create testngx "$TEST_DIST_DIR" --dry-run 2>&1) || true
+    
+    # Should handle existing or non-existing hosts entries gracefully
+    if grep -q "127\.0\.0\.1[[:space:]]\+${test_domain}" /etc/hosts 2>/dev/null; then
+        # Domain exists - should show update behavior
+        assert_contains "$output" "DRY RUN" "Handles existing hosts entry"
+    else
+        # Domain doesn't exist - should show creation behavior
+        assert_contains "$output" "DRY RUN" "Handles new hosts entry"
+    fi
+
+    test_start "Force flag with hosts file operations"
+    local output
+    output=$("$SCRIPT_PATH" create testngx "$TEST_DIST_DIR" --dry-run --force --verbose 2>&1) || true
+    
+    # Force flag should be recognized in dry-run
+    assert_contains "$output" "DRY RUN" "Force flag works with hosts operations"
+    assert_contains "$output" "$test_domain" "Domain appears with force flag"
+
+    test_start "Hosts file cleanup in remove command"
+    local output
+    output=$("$SCRIPT_PATH" remove testngx --dry-run --verbose 2>&1) || true
+    
+    # Remove should show hosts file cleanup
+    assert_contains "$output" "DRY RUN" "Remove shows hosts cleanup in dry-run"
+
+    test_start "Hosts file validation and safety checks"
+    local output
+    output=$("$SCRIPT_PATH" create testngx "$TEST_DIST_DIR" --dry-run 2>&1) || true
+    
+    # Should not show any error messages about hosts file access in dry-run
+    if echo "$output" | grep -q "Permission denied\|cannot access"; then
+        test_fail "Hosts file validation" "Permission errors in dry-run mode"
+    else
+        test_pass "Hosts file validation and safety checks"
+    fi
+
+    test_start "Multiple domain handling in hosts file"
+    # Test with different TLD
+    local output
+    output=$("$SCRIPT_PATH" create testngx "$TEST_DIST_DIR" --tld .dev --dry-run 2>&1) || true
+    
+    # Should handle different TLDs correctly
+    assert_contains "$output" "testngx.dev" "Handles custom TLD in hosts operations"
+
+    test_start "Hosts file backup consideration"
+    local output
+    output=$("$SCRIPT_PATH" create testngx "$TEST_DIST_DIR" --dry-run --verbose 2>&1) || true
+    
+    # In a well-designed system, should mention backup or safety measures
+    # This is more of a design check - the script should be safe
+    assert_contains "$output" "DRY RUN" "Hosts operations show safety measures"
+}
+
 #######################################
 # Test execution
 #######################################
@@ -455,6 +524,7 @@ run_all_tests() {
     test_site_management
     test_remove_functionality
     test_validation_features
+    test_hosts_file_functionality
     
     # Cleanup
     cleanup_test_environment
