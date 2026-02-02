@@ -84,6 +84,9 @@ scripts/sato/history.json.backup
 scripts/sato/*.json.backup
 scripts/sato/maintenance_mode.flag
 
+# DBM credentials
+scripts/dbm/.dbmrc
+
 # Node.js (if any)
 node_modules/
 npm-debug.log*
