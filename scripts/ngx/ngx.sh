@@ -139,35 +139,77 @@ log_verbose() {
 #######################################
 show_usage() {
     local script_name="$1"
+    local reset="" bold="" dim="" cyan="" green="" yellow="" blue=""
+
+    if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && command -v tput >/dev/null 2>&1; then
+        local color_count
+        color_count="$(tput colors 2>/dev/null || echo 0)"
+
+        if [ "${color_count:-0}" -ge 8 ]; then
+            reset="$(tput sgr0)"
+            bold="$(tput bold)"
+            dim="$(tput dim)"
+            cyan="$(tput setaf 6)"
+            green="$(tput setaf 2)"
+            yellow="$(tput setaf 3)"
+            blue="$(tput setaf 4)"
+        fi
+    fi
+
     cat <<EOF
-🚀 Nginx Configuration Script v${SCRIPT_VERSION}
+${bold}${cyan}🚀 ngx v${SCRIPT_VERSION}${reset}
+${dim}Create and manage local Nginx site configs for dev apps, APIs, and static builds.${reset}
 
-Usage: $script_name <command> [options]
+${bold}${cyan}📌 Usage${reset}
+  ${green}$script_name${reset} ${yellow}create${reset} ${bold}<domain>${reset} ${bold}<path>${reset} [options]
+  ${green}$script_name${reset} ${yellow}remove${reset} ${bold}<domain>${reset} [options]
+  ${green}$script_name${reset} ${yellow}list${reset}
+  ${green}$script_name${reset} ${yellow}version${reset}
 
-Commands:
-  create <domain> <path>    Create new site configuration
-  remove <domain>           Remove site configuration
-  list                      List all configured sites
-  version                   Show version information
+${bold}${cyan}🧭 Commands${reset}
+  ${yellow}create${reset} ${bold}<domain>${reset} ${bold}<path>${reset}    Create a site config and hosts entry.
+                              ${dim}Example: myapp -> myapp${DEFAULT_TLD}${reset}
+  ${yellow}remove${reset} ${bold}<domain>${reset}           Remove the Nginx config and hosts entry.
+  ${yellow}list${reset}                      Show configured local sites.
+  ${yellow}version${reset}                   Show the installed ngx version.
 
-Create Options:
-  -p, --port <port>         Custom port (default: 80)
-  -t, --tld <tld>          Custom TLD (default: .io)
-  -s, --ssl                Enable SSL/HTTPS
-  --spa                    Configure for Single Page Application
-  --api <url>              Add API proxy configuration
-  -f, --force              Force update if domain exists
-  --dry-run                Show what would be done without executing
-  -v, --verbose            Enable verbose logging
-  -q, --quiet              Minimal output
-  -h, --help               Show this help message
+${bold}${cyan}⚙️  Create Options${reset}
+  ${yellow}-p, --port${reset} ${bold}<port>${reset}        Serve or proxy to a custom local port.
+                          ${dim}Useful for Vite, Next.js, NestJS, Rails, etc. Default: ${DEFAULT_PORT}${reset}
 
-Examples:
-  $script_name create myapp /path/to/dist
-  $script_name create myapp /path/to/dist --ssl --spa
-  $script_name create api /path/to/dist --port 3000 --tld .dev
-  $script_name remove myapp
-  $script_name list
+  ${yellow}-t, --tld${reset} ${bold}<tld>${reset}          Choose the local domain suffix.
+                          ${dim}Useful to separate projects: admin.dev, api.test. Default: ${DEFAULT_TLD}${reset}
+
+  ${yellow}-s, --ssl${reset}                Enable HTTPS.
+                          ${dim}Useful for secure cookies, OAuth callbacks, service workers, and mixed-content testing.${reset}
+
+  ${yellow}--spa${reset}                    Route unknown paths to index.html.
+                          ${dim}Use for React, Vue, Angular, Svelte, or any client-side router.${reset}
+
+  ${yellow}--api${reset} ${bold}<url>${reset}              Proxy /api to a backend service.
+                          ${dim}Example: --api http://localhost:3000${reset}
+
+${bold}${cyan}🛡️  Safety & Output${reset}
+  ${yellow}-f, --force${reset}              Update an existing domain without stopping for conflict handling.
+  ${yellow}--dry-run${reset}                Preview files, hosts changes, and Nginx actions without applying them.
+  ${yellow}-v, --verbose${reset}            Show detailed steps while ngx works.
+  ${yellow}-q, --quiet${reset}              Keep output minimal; errors still show.
+  ${yellow}-h, --help${reset}               Show this help message.
+
+${bold}${cyan}✨ Examples${reset}
+  ${blue}$script_name create myapp /path/to/dist${reset}
+    ${dim}Serve a static build at myapp${DEFAULT_TLD}.${reset}
+
+  ${blue}$script_name create dashboard /path/to/dist --ssl --spa${reset}
+    ${dim}Serve a frontend app over HTTPS with client-side routing.${reset}
+
+  ${blue}$script_name create api /path/to/dist --api http://localhost:3000 --tld .dev${reset}
+    ${dim}Serve static files and proxy /api to a local backend at api.dev.${reset}
+
+  ${blue}$script_name remove myapp${reset}
+  ${blue}$script_name list${reset}
+
+${dim}Tip: set NO_COLOR=1 to disable colored help output.${reset}
 EOF
 }
 
