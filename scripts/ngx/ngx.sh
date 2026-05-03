@@ -13,6 +13,7 @@ set -euo pipefail
 
 # Version information
 readonly SCRIPT_VERSION="2.0.0"
+readonly SCRIPT_NAME="$(basename -- "${BASH_SOURCE[0]}")"
 readonly CONFIG_DIR="$HOME/.ngx"
 readonly CONFIG_FILE="$CONFIG_DIR/config"
 
@@ -23,6 +24,48 @@ DEFAULT_SSL_PORT=443
 NGINX_CONF_DIR="/etc/nginx/conf.d"
 NGINX_MAIN_CONF="/etc/nginx/nginx.conf"
 HOSTS_FILE="/etc/hosts"
+
+#######################################
+# Strip surrounding double quotes from a config value
+# Arguments:
+#   $1 - Value
+# Outputs:
+#   Unquoted value
+#######################################
+strip_quotes() {
+    local value="$1"
+
+    value="${value%\"}"
+    value="${value#\"}"
+    echo "$value"
+}
+
+#######################################
+# Prompt for a yes/no confirmation
+# Arguments:
+#   $1 - Prompt text
+# Returns:
+#   0 for yes, 1 for no
+#######################################
+confirm() {
+    local prompt="$1"
+    local answer=""
+
+    if [ ! -t 0 ]; then
+        log_warning "Cannot prompt for confirmation in a non-interactive shell."
+        return 1
+    fi
+
+    read -r -p "$prompt [y/N]: " answer
+    case "$answer" in
+        [yY]|[yY][eE][sS])
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
 
 #######################################
 # Print a formatted log message
@@ -148,8 +191,61 @@ EOF
         log_verbose "Created default config file: $CONFIG_FILE"
     fi
     
-    # Source the config file
-    source "$CONFIG_FILE"
+    load_config "$CONFIG_FILE"
+}
+
+#######################################
+# Load the script config without executing arbitrary shell code
+# Arguments:
+#   $1 - Config file path
+#######################################
+load_config() {
+    local config_file="$1"
+    local line key value
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ""|\#*)
+                continue
+                ;;
+        esac
+
+        if [[ ! "$line" =~ ^[A-Z_]+=\"?[A-Za-z0-9_./:-]+\"?$ ]]; then
+            log_warning "Ignoring invalid config line: $line"
+            continue
+        fi
+
+        key="${line%%=*}"
+        value="${line#*=}"
+        value="$(strip_quotes "$value")"
+
+        case "$key" in
+            DEFAULT_TLD)
+                validate_tld "$value" || { log_warning "Ignoring invalid DEFAULT_TLD in config"; continue; }
+                DEFAULT_TLD="$value"
+                ;;
+            DEFAULT_PORT)
+                validate_port "$value" || { log_warning "Ignoring invalid DEFAULT_PORT in config"; continue; }
+                DEFAULT_PORT="$value"
+                ;;
+            DEFAULT_SSL_PORT)
+                validate_port "$value" || { log_warning "Ignoring invalid DEFAULT_SSL_PORT in config"; continue; }
+                DEFAULT_SSL_PORT="$value"
+                ;;
+            NGINX_CONF_DIR)
+                NGINX_CONF_DIR="$value"
+                ;;
+            NGINX_MAIN_CONF)
+                NGINX_MAIN_CONF="$value"
+                ;;
+            HOSTS_FILE)
+                HOSTS_FILE="$value"
+                ;;
+            *)
+                log_warning "Ignoring unknown config key: $key"
+                ;;
+        esac
+    done < "$config_file"
 }
 
 #######################################
@@ -176,7 +272,7 @@ parse_arguments() {
 
     # Check if no arguments provided
     if [ $# -eq 0 ]; then
-        show_usage "$(basename "$0")"
+        show_usage "$SCRIPT_NAME"
         exit 1
     fi
 
@@ -199,12 +295,12 @@ parse_arguments() {
             exit 0
             ;;
         -h|--help)
-            show_usage "$(basename "$0")"
+            show_usage "$SCRIPT_NAME"
             exit 0
             ;;
         *)
             log_error "Unknown command: $COMMAND"
-            show_usage "$(basename "$0")"
+            show_usage "$SCRIPT_NAME"
             exit 1
             ;;
     esac
@@ -233,7 +329,7 @@ parse_remove_arguments() {
                 shift
                 ;;
             -h|--help)
-                show_usage "$(basename "$0")"
+                show_usage "$SCRIPT_NAME"
                 exit 0
                 ;;
             *)
@@ -253,6 +349,7 @@ parse_remove_arguments() {
     fi
 
     DOMAIN_NAME="$1"
+    validate_domain_input "$DOMAIN_NAME"
 }
 
 #######################################
@@ -302,7 +399,7 @@ parse_create_arguments() {
                 shift
                 ;;
             -h|--help)
-                show_usage "$(basename "$0")"
+                show_usage "$SCRIPT_NAME"
                 exit 0
                 ;;
             *)
@@ -318,12 +415,84 @@ parse_create_arguments() {
     # Validate required arguments for create
     if [ $# -lt 2 ]; then
         log_error "Domain name and path required for create command"
-        show_usage "$(basename "$0")"
+        show_usage "$SCRIPT_NAME"
         exit 1
     fi
 
     DOMAIN_NAME="$1"
     DIST_FOLDER="$2"
+    validate_domain_input "$DOMAIN_NAME"
+
+    if [ -n "$CUSTOM_TLD" ]; then
+        validate_tld "$CUSTOM_TLD"
+    fi
+
+    if [ -n "$CUSTOM_PORT" ]; then
+        validate_port "$CUSTOM_PORT"
+    fi
+}
+
+#######################################
+# Validate a TCP port number
+# Arguments:
+#   $1 - Port number
+#######################################
+validate_port() {
+    local port="$1"
+
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        log_error "Invalid port: $port"
+        return 1
+    fi
+
+    return 0
+}
+
+#######################################
+# Validate a TLD suffix
+# Arguments:
+#   $1 - TLD, including leading dot
+#######################################
+validate_tld() {
+    local tld="$1"
+
+    if [[ ! "$tld" =~ ^\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then
+        log_error "Invalid TLD: $tld"
+        return 1
+    fi
+
+    return 0
+}
+
+#######################################
+# Validate user-provided domain input before using it in paths/regexes
+# Arguments:
+#   $1 - Domain name
+#######################################
+validate_domain_input() {
+    local domain="$1"
+    local label
+    local -a labels
+
+    if [ -z "$domain" ] || [ "${#domain}" -gt 253 ]; then
+        log_error "Invalid domain name: $domain"
+        return 1
+    fi
+
+    if [[ "$domain" == *"/"* ]] || [[ "$domain" == *".."* ]] || [[ "$domain" == .* ]] || [[ "$domain" == *. ]]; then
+        log_error "Invalid domain name: $domain"
+        return 1
+    fi
+
+    IFS='.' read -r -a labels <<< "$domain"
+    for label in "${labels[@]}"; do
+        if [[ ! "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then
+            log_error "Invalid domain name: $domain"
+            return 1
+        fi
+    done
+
+    return 0
 }
 
 #######################################
@@ -335,11 +504,21 @@ parse_create_arguments() {
 #######################################
 normalize_domain_name() {
     local domain="$1"
-    local tld="${CUSTOM_TLD:-$DEFAULT_TLD}"
-    
-    # Remove any existing TLD, then add the specified one
-    domain=$(echo "$domain" | sed 's/\.[a-z]\+$//')
-    echo "${domain}${tld}"
+
+    if [ -n "${CUSTOM_TLD:-}" ]; then
+        if [[ "$domain" == *.* ]]; then
+            domain="${domain%.*}"
+        fi
+        echo "${domain}${CUSTOM_TLD}"
+        return 0
+    fi
+
+    if [[ "$domain" != *.* ]]; then
+        echo "${domain}${DEFAULT_TLD}"
+        return 0
+    fi
+
+    echo "$domain"
 }
 
 #######################################
@@ -355,23 +534,161 @@ get_config_name() {
 }
 
 #######################################
-# Check if nginx is installed and running
+# Escape a domain for use in grep/sed extended regexes
+# Arguments:
+#   $1 - Domain name
+# Outputs:
+#   Regex-safe domain
+#######################################
+escape_domain_regex() {
+    local domain="$1"
+    printf '%s' "$domain" | sed 's/[.[\*^$()+?{}|\\]/\\&/g'
+}
+
+#######################################
+# Verify sudo is available before privileged changes begin
+#######################################
+ensure_sudo_access() {
+    if ! command -v sudo >/dev/null 2>&1; then
+        log_error "sudo is required for nginx and hosts file changes."
+        return 1
+    fi
+
+    if ! sudo -v; then
+        log_error "sudo authentication failed. No changes were made."
+        return 1
+    fi
+
+    return 0
+}
+
+#######################################
+# Install nginx using the available package manager
+# Returns:
+#   0 if nginx was installed, 1 otherwise
+#######################################
+install_nginx() {
+    log_info "Installing Nginx..."
+
+    if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get update
+        sudo apt-get install -y nginx
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y nginx
+    elif command -v yum >/dev/null 2>&1; then
+        sudo yum install -y nginx
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --noconfirm nginx
+    elif command -v zypper >/dev/null 2>&1; then
+        sudo zypper install -y nginx
+    elif command -v apk >/dev/null 2>&1; then
+        sudo apk add nginx
+    elif command -v brew >/dev/null 2>&1; then
+        brew install nginx
+    else
+        log_error "No supported package manager found. Please install Nginx manually."
+        return 1
+    fi
+
+    if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files nginx.service >/dev/null 2>&1; then
+        sudo systemctl enable nginx >/dev/null 2>&1 || log_warning "Could not enable nginx service automatically."
+        sudo systemctl start nginx >/dev/null 2>&1 || log_warning "Could not start nginx service automatically."
+    fi
+
+    command -v nginx >/dev/null 2>&1
+}
+
+#######################################
+# Check if nginx is installed, prompting for installation when missing
 # Returns:
 #   0 if nginx is available, 1 otherwise
 #######################################
 check_nginx_availability() {
     # Check if nginx is installed
     if ! command -v nginx >/dev/null 2>&1; then
-        log_error "Nginx is not installed. Please install nginx first."
-        return 1
+        log_warning "Nginx is not installed."
+
+        if confirm "Install Nginx now?"; then
+            if ! ensure_sudo_access; then
+                return 1
+            fi
+
+            if ! install_nginx; then
+                log_error "Nginx installation failed. Please install Nginx manually and try again."
+                return 1
+            fi
+            log_success "Nginx installed successfully"
+        else
+            log_error "Nginx is required to create a site. Install it manually and run this command again."
+            return 1
+        fi
     fi
     
     # Check if nginx service exists
-    if ! systemctl list-unit-files nginx.service >/dev/null 2>&1; then
+    if command -v systemctl >/dev/null 2>&1 && ! systemctl list-unit-files nginx.service >/dev/null 2>&1; then
         log_warning "Nginx service not found. Manual nginx management may be required."
     fi
     
     return 0
+}
+
+#######################################
+# Determine which local user nginx should run as
+# Outputs:
+#   Username
+#######################################
+get_nginx_runtime_user() {
+    local runtime_user="${SUDO_USER:-${USER:-}}"
+
+    if [ -z "$runtime_user" ]; then
+        runtime_user="$(id -un)"
+    fi
+
+    if [ "$runtime_user" = "root" ] && [ -n "${LOGNAME:-}" ] && [ "$LOGNAME" != "root" ]; then
+        runtime_user="$LOGNAME"
+    fi
+
+    echo "$runtime_user"
+}
+
+#######################################
+# Update nginx.conf to run workers as the invoking user
+# Arguments:
+#   $1 - Username
+#######################################
+update_nginx_runtime_user() {
+    local runtime_user="$1"
+
+    if ! id "$runtime_user" >/dev/null 2>&1; then
+        log_error "User '$runtime_user' does not exist on this system."
+        return 1
+    fi
+
+    if [ ! -f "$NGINX_MAIN_CONF" ]; then
+        log_warning "Nginx main config not found at $NGINX_MAIN_CONF. Skipping nginx user update."
+        return 0
+    fi
+
+    if sudo grep -Eq "^[[:space:]]*user[[:space:]]+$runtime_user;" "$NGINX_MAIN_CONF"; then
+        log_verbose "Nginx runtime user already set to $runtime_user"
+        return 0
+    fi
+
+    log_info "Updating nginx runtime user to $runtime_user in $NGINX_MAIN_CONF"
+    sudo cp "$NGINX_MAIN_CONF" "${NGINX_MAIN_CONF}.bak"
+
+    if sudo grep -Eq "^[[:space:]]*user[[:space:]]+" "$NGINX_MAIN_CONF"; then
+        sudo sed -i "s/^[[:space:]]*user[[:space:]].*;/user $runtime_user;/" "$NGINX_MAIN_CONF"
+    else
+        local tmp_file
+        tmp_file="$(mktemp)"
+        printf 'user %s;\n' "$runtime_user" > "$tmp_file"
+        sudo cat "$NGINX_MAIN_CONF" >> "$tmp_file"
+        sudo tee "$NGINX_MAIN_CONF" < "$tmp_file" >/dev/null
+        rm -f "$tmp_file"
+    fi
+
+    log_success "Nginx runtime user updated to $runtime_user"
 }
 
 #######################################
@@ -416,19 +733,69 @@ validate_dist_folder() {
 }
 
 #######################################
-# Check for port conflicts
+# Check if SSL port conflicts with the HTTP port
+# Arguments:
+#   $1 - HTTP port
+#   $2 - SSL enabled (0 or 1)
+#######################################
+validate_port_combination() {
+    local port="$1"
+    local ssl_enabled="${2:-0}"
+
+    validate_port "$port"
+
+    if [ "$ssl_enabled" -eq 1 ]; then
+        validate_port "$DEFAULT_SSL_PORT"
+        if [ "$port" -eq "$DEFAULT_SSL_PORT" ]; then
+            log_error "HTTP port cannot match SSL port $DEFAULT_SSL_PORT when SSL is enabled."
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+#######################################
+# Check if port is currently in use
 # Arguments:
 #   $1 - Port number
 #######################################
+check_single_port_availability() {
+    local port="$1"
+
+    if command -v ss >/dev/null 2>&1; then
+        if ss -tuln 2>/dev/null | grep -Eq "[:.]$port[[:space:]]"; then
+            log_warning "Port $port appears to be in use. This may cause conflicts."
+            return 1
+        fi
+    elif command -v netstat >/dev/null 2>&1; then
+        if netstat -tuln 2>/dev/null | grep -Eq "[:.]$port[[:space:]]"; then
+            log_warning "Port $port appears to be in use. This may cause conflicts."
+            return 1
+        fi
+    else
+        log_verbose "Neither ss nor netstat found; skipping port availability check."
+    fi
+
+    return 0
+}
+
+#######################################
+# Check for port conflicts
+# Arguments:
+#   $1 - HTTP port
+#   $2 - SSL enabled (0 or 1)
+#######################################
 check_port_availability() {
     local port="$1"
-    
-    # Check if port is in use
-    if netstat -tuln 2>/dev/null | grep -q ":$port "; then
-        log_warning "Port $port appears to be in use. This may cause conflicts."
-        return 1
+    local ssl_enabled="${2:-0}"
+
+    check_single_port_availability "$port" || return 1
+
+    if [ "$ssl_enabled" -eq 1 ]; then
+        check_single_port_availability "$DEFAULT_SSL_PORT" || return 1
     fi
-    
+
     return 0
 }
 
@@ -437,31 +804,38 @@ check_port_availability() {
 # Arguments:
 #   $1 - Domain name
 #   $2 - Certificate directory
+#   $3 - Private key directory
 #######################################
 generate_ssl_certificate() {
     local domain="$1"
     local cert_dir="$2"
+    local key_dir="$3"
+    local cert_path="$cert_dir/$domain.crt"
+    local key_path="$key_dir/$domain.key"
+    local csr_file
     
     log_verbose "Generating SSL certificate for $domain"
     
-    # Create certificate directory
+    # Create certificate and private key directories
     sudo mkdir -p "$cert_dir"
+    sudo mkdir -p "$key_dir"
+    csr_file="$(mktemp)"
     
     # Generate private key
-    sudo openssl genrsa -out "$cert_dir/$domain.key" 2048
+    sudo openssl genrsa -out "$key_path" 2048
     
     # Generate certificate signing request
-    sudo openssl req -new -key "$cert_dir/$domain.key" -out "$cert_dir/$domain.csr" -subj "/C=US/ST=State/L=City/O=Organization/CN=$domain"
+    sudo openssl req -new -key "$key_path" -out "$csr_file" -subj "/CN=$domain"
     
     # Generate self-signed certificate
-    sudo openssl x509 -req -days 365 -in "$cert_dir/$domain.csr" -signkey "$cert_dir/$domain.key" -out "$cert_dir/$domain.crt"
+    sudo openssl x509 -req -days 365 -in "$csr_file" -signkey "$key_path" -out "$cert_path"
     
     # Set proper permissions
-    sudo chmod 600 "$cert_dir/$domain.key"
-    sudo chmod 644 "$cert_dir/$domain.crt"
+    sudo chmod 600 "$key_path"
+    sudo chmod 644 "$cert_path"
     
     # Clean up CSR file
-    sudo rm -f "$cert_dir/$domain.csr"
+    rm -f "$csr_file"
     
     log_success "SSL certificate generated for $domain"
 }
@@ -477,9 +851,11 @@ generate_ssl_certificate() {
 domain_exists_in_hosts() {
     local domain="$1"
     local hosts_file="$2"
+    local domain_regex
+    domain_regex="$(escape_domain_regex "$domain")"
     
     # Use grep with word boundaries and anchoring to ensure exact match
-    if grep -q "127\.0\.0\.1[[:space:]]\+${domain}$\|127\.0\.0\.1[[:space:]]\+${domain}[[:space:]]\+" "$hosts_file"; then
+    if grep -Eq "127\.0\.0\.1[[:space:]]+${domain_regex}($|[[:space:]])" "$hosts_file"; then
         return 0  # Domain exists
     else
         return 1  # Domain doesn't exist
@@ -499,14 +875,15 @@ update_hosts_file() {
     local domain="$1"
     local hosts_file="$2"
     local force_update="${3:-0}"
+    local domain_regex
+    domain_regex="$(escape_domain_regex "$domain")"
     
     # Check if domain already exists in hosts file
     if domain_exists_in_hosts "$domain" "$hosts_file"; then
         if [ "$force_update" -eq 1 ]; then
             log_info "Domain ${domain} exists in hosts file. Forcing update as requested."
             # Remove existing entry (match exact domain)
-            sudo sed -i "/127\.0\.0\.1[[:space:]]\+${domain}$/d" "$hosts_file"
-            sudo sed -i "/127\.0\.0\.1[[:space:]]\+${domain}[[:space:]]\+/d" "$hosts_file"
+            sudo sed -i -E "/127\.0\.0\.1[[:space:]]+${domain_regex}($|[[:space:]])/d" "$hosts_file"
             # Add the domain to /etc/hosts
             echo "127.0.0.1 ${domain}" | sudo tee -a "$hosts_file" >/dev/null
             log_success "Updated ${domain} in hosts file."
@@ -553,7 +930,7 @@ generate_nginx_config() {
 
 "
         # HTTPS server block
-        local ssl_port="${CUSTOM_PORT:-443}"
+        local ssl_port="$DEFAULT_SSL_PORT"
         config_content+="server {
     listen $ssl_port ssl;
     server_name $domain www.$domain;
@@ -635,6 +1012,7 @@ generate_nginx_config() {
 create_site() {
     local normalized_domain
     normalized_domain=$(normalize_domain_name "$DOMAIN_NAME")
+    validate_domain_input "$normalized_domain"
     
     if [ "${DRY_RUN:-0}" -eq 1 ]; then
         # Always show the main action, even in quiet mode
@@ -646,6 +1024,8 @@ create_site() {
             [ "${ENABLE_SPA:-0}" -eq 1 ] && log_info "DRY RUN: SPA mode enabled"
             [ -n "${CUSTOM_PORT:-}" ] && log_info "DRY RUN: Custom port: $CUSTOM_PORT"
             [ -n "${API_PROXY:-}" ] && log_info "DRY RUN: API proxy: $API_PROXY"
+            log_info "DRY RUN: Would ensure Nginx is installed"
+            log_info "DRY RUN: Would update nginx runtime user in $NGINX_MAIN_CONF"
             
             if [ "${ENABLE_SSL:-0}" -eq 1 ]; then
                 log_info "DRY RUN: Would generate SSL certificate"
@@ -677,9 +1057,20 @@ create_site() {
     if ! validate_dist_folder "$DIST_FOLDER"; then
         exit 1
     fi
-    
+
     # Check nginx availability
     if ! check_nginx_availability; then
+        exit 1
+    fi
+
+    # Verify sudo before any privileged command can partially configure the system
+    if ! ensure_sudo_access; then
+        exit 1
+    fi
+
+    local runtime_user
+    runtime_user="$(get_nginx_runtime_user)"
+    if ! update_nginx_runtime_user "$runtime_user"; then
         exit 1
     fi
     
@@ -687,15 +1078,19 @@ create_site() {
     config_name=$(get_config_name "$normalized_domain")
     local config_file="$NGINX_CONF_DIR/${config_name}.conf"
     local port="${CUSTOM_PORT:-$DEFAULT_PORT}"
+
+    if ! validate_port_combination "$port" "${ENABLE_SSL:-0}"; then
+        exit 1
+    fi
     
     # Check port availability
-    check_port_availability "$port"
+    check_port_availability "$port" "${ENABLE_SSL:-0}" || true
     
     log_info "Creating site configuration for $normalized_domain"
     
     # Generate SSL certificate if needed
     if [ "${ENABLE_SSL:-0}" -eq 1 ]; then
-        generate_ssl_certificate "$normalized_domain" "/etc/ssl/certs"
+        generate_ssl_certificate "$normalized_domain" "/etc/ssl/certs" "/etc/ssl/private"
     fi
     
     # Generate nginx configuration
@@ -734,6 +1129,7 @@ create_site() {
 remove_site() {
     local normalized_domain
     normalized_domain=$(normalize_domain_name "$DOMAIN_NAME")
+    validate_domain_input "$normalized_domain"
     
     local config_name
     config_name=$(get_config_name "$normalized_domain")
@@ -760,12 +1156,16 @@ remove_site() {
         
         return 0
     fi
-    
+
     # Check if configuration file exists
     if [ ! -f "$config_file" ]; then
         log_error "Site configuration for '$normalized_domain' not found"
         log_info "Available sites:"
         list_sites
+        exit 1
+    fi
+
+    if ! ensure_sudo_access; then
         exit 1
     fi
     
@@ -783,9 +1183,11 @@ remove_site() {
     fi
     
     # Remove hosts file entry
-    if grep -q "127\.0\.0\.1[[:space:]]\+${normalized_domain}" "$HOSTS_FILE" 2>/dev/null; then
+    local domain_regex
+    domain_regex="$(escape_domain_regex "$normalized_domain")"
+    if grep -Eq "127\.0\.0\.1[[:space:]]+${domain_regex}($|[[:space:]])" "$HOSTS_FILE" 2>/dev/null; then
         log_verbose "Removing hosts file entry"
-        sudo sed -i "/127\.0\.0\.1[[:space:]]\+${normalized_domain}/d" "$HOSTS_FILE"
+        sudo sed -i -E "/127\.0\.0\.1[[:space:]]+${domain_regex}($|[[:space:]])/d" "$HOSTS_FILE"
     fi
     
     # Test and reload nginx
@@ -819,10 +1221,6 @@ list_sites() {
                     local filename
                     filename=$(basename "$config_file" .conf)
                     
-                    # Convert underscores back to dots for display
-                    local domain_name
-                    domain_name=$(echo "$filename" | sed 's/_/\./g')
-                    
                     # Extract document root from config file
                     local doc_root
                     doc_root=$(grep -E "^\s*root\s+" "$config_file" | head -1 | awk '{print $2}' | sed 's/;//' || echo "Unknown")
@@ -842,7 +1240,7 @@ list_sites() {
                     echo "     Config: $config_file"
                     echo
                     
-                    ((count++))
+                    count=$((count + 1))
                 fi
             done <<< "$config_files"
         fi
@@ -850,7 +1248,7 @@ list_sites() {
     
     if [ $count -eq 0 ]; then
         log_info "No sites configured"
-        echo "  Use '$0 create <domain> <path>' to create a new site"
+        echo "  Use '$SCRIPT_NAME create <domain> <path>' to create a new site"
     else
         log_success "Found $count configured site(s)"
     fi

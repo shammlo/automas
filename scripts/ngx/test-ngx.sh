@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Description: Comprehensive test suite for NGX script with 38 test cases covering all features
+# Description: Comprehensive test suite for NGX script covering all features
 #
 # Test Suite for NGX Script
 #
@@ -204,6 +204,20 @@ test_argument_validation() {
     # Should show error for non-existent folder
     assert_exit_code 1 "${exit_code:-0}" "Non-existent folder exits with code 1"
     assert_contains "$output" "does not exist" "Non-existent folder shows error"
+
+    test_start "Unsafe domain names are rejected"
+    exit_code=0
+    output=$("$SCRIPT_PATH" create "../../etc/cron.d/evil" "$TEST_DIST_DIR" --dry-run 2>&1) || exit_code=$?
+
+    assert_exit_code 1 "${exit_code:-0}" "Unsafe domain exits with code 1"
+    assert_contains "$output" "Invalid domain name" "Unsafe domain shows validation error"
+
+    test_start "Invalid custom ports are rejected"
+    exit_code=0
+    output=$("$SCRIPT_PATH" create testapp "$TEST_DIST_DIR" --port 70000 --dry-run 2>&1) || exit_code=$?
+
+    assert_exit_code 1 "${exit_code:-0}" "Invalid port exits with code 1"
+    assert_contains "$output" "Invalid port" "Invalid port shows validation error"
 }
 
 test_configuration_management() {
@@ -224,6 +238,29 @@ test_configuration_management() {
     else
         test_fail "Config file created" "Config file not found"
     fi
+
+    test_start "Config file is parsed without executing shell code"
+    local temp_home="/tmp/ngx-config-safe-$$"
+    local marker_file="$temp_home/pwned"
+    mkdir -p "$temp_home/.ngx"
+    cat > "$temp_home/.ngx/config" <<EOF
+DEFAULT_TLD=".dev"
+DEFAULT_PORT=8080
+NGINX_CONF_DIR="/tmp/ngx-safe-conf"
+MALICIOUS="\$(touch $marker_file)"
+EOF
+
+    local output
+    output=$(HOME="$temp_home" "$SCRIPT_PATH" create safeapp "$TEST_DIST_DIR" --dry-run 2>&1) || true
+
+    assert_contains "$output" "safeapp.dev" "Safe config parser applies valid settings"
+    if [ ! -f "$marker_file" ]; then
+        test_pass "Config parser does not execute command substitutions"
+    else
+        test_fail "Config parser does not execute command substitutions" "Marker file was created"
+    fi
+
+    rm -rf "$temp_home"
 }
 
 test_domain_features() {
@@ -238,6 +275,10 @@ test_domain_features() {
     # Test custom .dev TLD
     result=$("$SCRIPT_PATH" create testapp "$TEST_DIST_DIR" --tld .dev --dry-run 2>&1 | grep -o "testapp\.dev" || echo "not_found")
     assert_equals "testapp.dev" "$result" "Custom .dev TLD normalization"
+
+    # Test dotted domain without --tld is preserved
+    result=$("$SCRIPT_PATH" create merchant.cardzz "$TEST_DIST_DIR" --dry-run 2>&1 | grep -o "merchant\.cardzz" || echo "not_found")
+    assert_equals "merchant.cardzz" "$result" "Dotted domain is preserved without custom TLD"
     
     # Test domain with existing TLD gets replaced
     result=$("$SCRIPT_PATH" create testapp.com "$TEST_DIST_DIR" --tld .local --dry-run 2>&1 | grep -o "testapp\.local" || echo "not_found")
@@ -312,6 +353,66 @@ test_ssl_features() {
     # Check that custom SSL port is recognized
     assert_contains "$output" "DRY RUN: Custom port: 8443" "Custom SSL port is configured"
     assert_contains "$output" "DRY RUN: SSL enabled" "SSL is enabled with custom port"
+
+    test_start "SSL config keeps HTTPS on default SSL port"
+    local temp_root="/tmp/ngx-ssl-port-test-$$"
+    local temp_script="$temp_root/ngx-sourceable.sh"
+    mkdir -p "$temp_root"
+    cp "$SCRIPT_PATH" "$temp_script"
+    sed -i 's/^main "$@"/# main "$@"/' "$temp_script"
+
+    output=$(
+        bash -c '
+            set -euo pipefail
+            source "$1"
+            CUSTOM_PORT=8443
+            DEFAULT_SSL_PORT=443
+            generate_nginx_config "testapp.io" "$2" 8443 1 0 ""
+        ' bash "$temp_script" "$TEST_DIST_DIR" 2>&1
+    ) || true
+
+    assert_contains "$output" "listen 8443;" "SSL config uses custom port for HTTP redirect listener"
+    assert_contains "$output" "listen 443 ssl;" "SSL config keeps HTTPS listener on default SSL port"
+    rm -rf "$temp_root"
+
+    test_start "SSL certificate key is generated under private directory"
+    temp_root="/tmp/ngx-ssl-cert-test-$$"
+    temp_script="$temp_root/ngx-sourceable.sh"
+    local cert_dir="$temp_root/certs"
+    local key_dir="$temp_root/private"
+    local openssl_log="$temp_root/openssl.log"
+    mkdir -p "$temp_root"
+    cp "$SCRIPT_PATH" "$temp_script"
+    sed -i 's/^main "$@"/# main "$@"/' "$temp_script"
+
+    output=$(
+        OPENSSL_LOG="$openssl_log" bash -c '
+            set -euo pipefail
+            source "$1"
+            sudo() {
+                if [ "${1:-}" = "chmod" ]; then
+                    return 0
+                fi
+                "$@"
+            }
+            openssl() { echo "openssl $*" >> "$OPENSSL_LOG"; }
+            generate_ssl_certificate "testapp.io" "$2" "$3"
+        ' bash "$temp_script" "$cert_dir" "$key_dir" 2>&1
+    ) || true
+
+    if grep -q "$key_dir/testapp.io.key" "$openssl_log" 2>/dev/null; then
+        test_pass "SSL certificate generation writes key to private directory"
+    else
+        test_fail "SSL certificate generation writes key to private directory" "Private key path was not used"
+    fi
+
+    if grep -q "/CN=testapp.io" "$openssl_log" 2>/dev/null; then
+        test_pass "SSL certificate subject only sets common name"
+    else
+        test_fail "SSL certificate subject only sets common name" "Expected CN-only OpenSSL subject"
+    fi
+
+    rm -rf "$temp_root"
 
     test_start "Combined flags (SSL + SPA + API)"
     local output
@@ -425,6 +526,190 @@ test_validation_features() {
     assert_contains "$output" "testapp.io" "Quiet mode shows essential info"
 }
 
+test_nginx_dependency_and_user_management() {
+    print_test_header "Nginx Dependency and Runtime User Tests"
+
+    test_start "Missing nginx prompts and installs when accepted"
+    local temp_root="/tmp/ngx-install-test-$$"
+    local temp_script="$temp_root/ngx-sourceable.sh"
+    local mock_bin="$temp_root/bin"
+    local install_log="$temp_root/install.log"
+    mkdir -p "$mock_bin"
+
+    cp "$SCRIPT_PATH" "$temp_script"
+    sed -i 's/^main "$@"/# main "$@"/' "$temp_script"
+
+    cat > "$mock_bin/apt-get" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+echo "apt-get $*" >> "$INSTALL_LOG"
+
+if [ "${1:-}" = "install" ]; then
+    cat > "$MOCK_BIN/nginx" <<'NGINX'
+#!/bin/bash
+exit 0
+NGINX
+    chmod +x "$MOCK_BIN/nginx"
+fi
+EOF
+    chmod +x "$mock_bin/apt-get"
+
+    cat > "$mock_bin/systemctl" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+    chmod +x "$mock_bin/systemctl"
+
+    local output exit_code
+    exit_code=0
+    output=$(
+        MOCK_BIN="$mock_bin" INSTALL_LOG="$install_log" PATH="$mock_bin:/bin" bash -c '
+            set -euo pipefail
+            source "$1"
+            confirm() { return 0; }
+            sudo() {
+                if [ "${1:-}" = "-v" ]; then
+                    return 0
+                fi
+                "$@"
+            }
+            check_nginx_availability
+        ' bash "$temp_script" 2>&1
+    ) || exit_code=$?
+
+    assert_exit_code 0 "${exit_code:-0}" "Accepted nginx install exits successfully"
+    assert_contains "$output" "Nginx installed successfully" "Accepted nginx install reports success"
+
+    if grep -q "apt-get install -y nginx" "$install_log" 2>/dev/null; then
+        test_pass "Accepted nginx install runs package install"
+    else
+        test_fail "Accepted nginx install runs package install" "Expected apt-get install -y nginx in install log"
+    fi
+
+    rm -rf "$temp_root"
+
+    test_start "Missing nginx does not install when declined"
+    temp_root="/tmp/ngx-install-decline-test-$$"
+    temp_script="$temp_root/ngx-sourceable.sh"
+    mock_bin="$temp_root/bin"
+    install_log="$temp_root/install.log"
+    mkdir -p "$mock_bin"
+
+    cp "$SCRIPT_PATH" "$temp_script"
+    sed -i 's/^main "$@"/# main "$@"/' "$temp_script"
+
+    cat > "$mock_bin/apt-get" <<'EOF'
+#!/bin/bash
+echo "apt-get $*" >> "$INSTALL_LOG"
+exit 0
+EOF
+    chmod +x "$mock_bin/apt-get"
+
+    exit_code=0
+    output=$(
+        MOCK_BIN="$mock_bin" INSTALL_LOG="$install_log" PATH="$mock_bin:/bin" bash -c '
+            set -euo pipefail
+            source "$1"
+            confirm() { return 1; }
+            sudo() { "$@"; }
+            check_nginx_availability
+        ' bash "$temp_script" 2>&1
+    ) || exit_code=$?
+
+    assert_exit_code 1 "${exit_code:-0}" "Declined nginx install exits with failure"
+    assert_contains "$output" "Nginx is required" "Declined nginx install explains requirement"
+
+    if [ ! -f "$install_log" ]; then
+        test_pass "Declined nginx install does not run package manager"
+    else
+        test_fail "Declined nginx install does not run package manager" "Package manager was called unexpectedly"
+    fi
+
+    rm -rf "$temp_root"
+
+    test_start "Create updates nginx runtime user in nginx.conf"
+    temp_root="/tmp/ngx-user-test-$$"
+    temp_script="$temp_root/ngx-sourceable.sh"
+    mock_bin="$temp_root/bin"
+    local nginx_conf_dir="$temp_root/conf.d"
+    local nginx_main_conf="$temp_root/nginx.conf"
+    local hosts_file="$temp_root/hosts"
+    local runtime_user
+    runtime_user="$(id -un)"
+
+    mkdir -p "$mock_bin" "$nginx_conf_dir"
+    cp "$SCRIPT_PATH" "$temp_script"
+    sed -i 's/^main "$@"/# main "$@"/' "$temp_script"
+
+    cat > "$nginx_main_conf" <<'EOF'
+user www-data;
+events {}
+http {
+    include /etc/nginx/conf.d/*.conf;
+}
+EOF
+    touch "$hosts_file"
+
+    cat > "$mock_bin/nginx" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+    chmod +x "$mock_bin/nginx"
+
+    cat > "$mock_bin/systemctl" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+    chmod +x "$mock_bin/systemctl"
+
+    exit_code=0
+    output=$(
+        PATH="$mock_bin:/usr/bin:/bin" SUDO_USER="$runtime_user" bash -c '
+            set -euo pipefail
+            source "$1"
+            NGINX_CONF_DIR="$2"
+            NGINX_MAIN_CONF="$3"
+            HOSTS_FILE="$4"
+            DOMAIN_NAME="runtimeuser"
+            DIST_FOLDER="$5"
+            CUSTOM_PORT=""
+            CUSTOM_TLD=""
+            ENABLE_SSL=0
+            ENABLE_SPA=0
+            API_PROXY=""
+            FORCE_UPDATE=0
+            DRY_RUN=0
+            VERBOSE=0
+            QUIET=0
+            sudo() {
+                if [ "${1:-}" = "-v" ]; then
+                    return 0
+                fi
+                "$@"
+            }
+            create_site
+        ' bash "$temp_script" "$nginx_conf_dir" "$nginx_main_conf" "$hosts_file" "$TEST_DIST_DIR" 2>&1
+    ) || exit_code=$?
+
+    assert_exit_code 0 "${exit_code:-0}" "Create with runtime user update exits successfully"
+    assert_contains "$output" "Nginx runtime user updated to $runtime_user" "Create reports nginx runtime user update"
+
+    if grep -q "^user $runtime_user;" "$nginx_main_conf"; then
+        test_pass "Create writes invoking user to nginx.conf"
+    else
+        test_fail "Create writes invoking user to nginx.conf" "nginx.conf did not contain expected user directive"
+    fi
+
+    if [ -f "${nginx_main_conf}.bak" ]; then
+        test_pass "Runtime user update backs up nginx.conf"
+    else
+        test_fail "Runtime user update backs up nginx.conf" "Backup file was not created"
+    fi
+
+    rm -rf "$temp_root"
+}
+
 test_hosts_file_functionality() {
     print_test_header "Hosts File Management Tests"
     
@@ -524,6 +809,7 @@ run_all_tests() {
     test_site_management
     test_remove_functionality
     test_validation_features
+    test_nginx_dependency_and_user_management
     test_hosts_file_functionality
     
     # Cleanup
