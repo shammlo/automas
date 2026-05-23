@@ -593,9 +593,9 @@ class SatoMonitoringSystem(Gtk.Window):
             "Local Cache": "💾",
             "CPU Monitor": "⚙️",
             "Network": "🌐",
-            "Cardhouzz DEV": "🏠",
-            "Cardhouzz": "🏠",
-            "Nasspay": "💳",
+            "API Gateway": "🌐",
+            "Admin API": "👨‍💻",
+            "User API": "👤",
             "App Services": "📱",
             "Auth Services": "🔐",
             "NestJS": "🟢",
@@ -760,13 +760,13 @@ class SatoMonitoringSystem(Gtk.Window):
         # Handle special cases where containers belong to the same service but have different naming
         container_lower = container_name.lower()
 
-        # Group cardhouzz-related containers together
+        # Group API-related containers together
         if (
-            container_lower.startswith("ch_")
-            or "cardhouzz" in container_lower
-            or container_lower.startswith("cardhouzz")
+            container_lower.startswith("api_")
+            or "gateway" in container_lower
+            or container_lower.startswith("gateway")
         ):
-            return "Cardhouzz"
+            return "API Gateway"
 
         # Extract the service prefix (part before first _ or -)
         if "_" in container_name:

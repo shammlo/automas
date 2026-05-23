@@ -7,9 +7,57 @@ _Like having a digital doctor for your servers - but one that actually knows wha
 ## 🚀 Quick Start
 
 ```bash
+# 1. Install dependencies
+pip3 install requests psutil docker
+
+# 2. Configure your services (first time only)
+cp config/config.json.example config/config.json
+nano config/config.json  # Edit with your services
+
+# 3. Run Sato
 ./sato
 # or
 python3 sato.py
+```
+
+### 📋 First Time Setup
+
+1. **Copy the example configuration:**
+
+   ```bash
+   cp config/config.json.example config/config.json
+   ```
+
+2. **Edit `config/config.json`** with your services:
+
+   ```json
+   [
+     {
+       "name": "My API",
+       "host": "https://api.mycompany.com",
+       "type": "server",
+       "icon": "🌐"
+     }
+   ]
+   ```
+
+3. **See the [Configuration Guide](config/CONFIG_GUIDE.md)** for detailed examples
+
+### 📚 Configuration Resources
+
+| Resource                                                | Description                                |
+| ------------------------------------------------------- | ------------------------------------------ |
+| **[QUICKSTART.md](QUICKSTART.md)**                      | 30-second setup guide with common examples |
+| **[setup.sh](setup.sh)**                                | Automated setup script (recommended)       |
+| **[config.json.example](config/config.json.example)**   | Template with 8 example services           |
+| **[CONFIG_GUIDE.md](config/CONFIG_GUIDE.md)**           | Complete configuration reference           |
+| **[history.json.example](config/history.json.example)** | History file template                      |
+
+### 🎯 Quick Setup Alternative
+
+```bash
+# One-command setup
+./setup.sh && nano config/config.json && python3 sato.py
 ```
 
 ## ✨ Advanced Features
@@ -290,3 +338,20 @@ _Because your infrastructure deserves better than crossing your fingers and hopi
 - No servers were harmed in the making of this monitoring system (though several bugs were ruthlessly eliminated)
 
 _P.S. - If Sato doesn't work, it will probably restart itself and send you a report about why it failed. Meta-monitoring at its finest._
+
+## 📚 **Documentation**
+
+### **📖 Key Documentation**
+
+- **`docs/ENHANCED_NOTIFICATIONS.md`** - Complete guide to enhanced notification features
+- **`docs/CLEANUP_SUMMARY.md`** - Recent codebase cleanup and organization
+- **`docs/PROJECT_STRUCTURE.md`** - Overall project architecture
+- **`docs/FINAL_STATUS.md`** - Current feature status and capabilities
+
+### **🔧 Utility Scripts**
+
+- **`core/config_repair.py`** - Fix configuration errors and compatibility issues
+- **`core/flap_optimizer.py`** - Optimize monitoring intervals and reduce alert spam
+- **`__tests__/test_notifications.py`** - Test enhanced notification system
+
+_Explore the `docs/` folder for comprehensive documentation on all features and improvements._

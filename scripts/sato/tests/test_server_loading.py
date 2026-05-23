@@ -51,18 +51,18 @@ def test_url_building():
         test_servers = [
             ServerConfig(
                 name="HTTPS with port",
-                host="apidev.cardhouzz.online",
+                host="api-dev.example.com",
                 port=5443,
                 check_type=CheckType.HTTP,
             ),
             ServerConfig(
                 name="Full URL",
-                host="https://apiuat.cardhouzz.online",
+                host="https://api-uat.example.com",
                 check_type=CheckType.HTTP,
             ),
             ServerConfig(
                 name="URL with path",
-                host="https://npapidev.nass.iq:6069/admin_api/",
+                host="https://admin-api-dev.example.com:6069/api/",
                 check_type=CheckType.HTTP,
             ),
         ]
