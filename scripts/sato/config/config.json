@@ -1,0 +1,48 @@
+[
+  {
+    "name": "API Gateway Dev",
+    "host": "api-dev.example.com",
+    "port": 5443,
+    "type": "server",
+    "icon": "🌐",
+    "expected_status_codes": [200, 401],
+    "check_interval": 120,
+    "timeout": 10
+  },
+  {
+    "name": "API Gateway UAT",
+    "host": "https://api-uat.example.com",
+    "type": "server",
+    "icon": "🧪",
+    "expected_status_codes": [200, 401],
+    "check_interval": 120,
+    "timeout": 10
+  },
+  {
+    "name": "Admin API Dev",
+    "host": "https://admin-api-dev.example.com:6069/api/",
+    "type": "server",
+    "icon": "👨‍💻",
+    "expected_status_codes": [200, 401],
+    "check_interval": 120,
+    "timeout": 10
+  },
+  {
+    "name": "User API Dev",
+    "host": "https://user-api-dev.example.com:6069/api/",
+    "icon": "👤",
+    "type": "server",
+    "expected_status_codes": [200, 401],
+    "check_interval": 120,
+    "timeout": 10
+  },
+  {
+    "name": "Production API",
+    "host": "https://api.example.com",
+    "icon": "🚀",
+    "type": "server",
+    "expected_status_codes": [200, 401],
+    "check_interval": 120,
+    "timeout": 10
+  }
+]

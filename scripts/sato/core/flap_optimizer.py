@@ -23,7 +23,7 @@ def apply_final_fixes():
             # Set longer intervals for external APIs
             if any(
                 domain in server.get("host", "")
-                for domain in ["nass.iq", "cardhouzz.online"]
+                for domain in ["example.com", "api.example.com"]
             ):
                 server["check_interval"] = 120  # 2 minutes for external APIs
                 server["timeout"] = 10  # Longer timeout
