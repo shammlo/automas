@@ -31,5 +31,4 @@ test_legacy=test_user:5432:test_db
 # invalid_format=invalid_config_line
 
 
-cardhouzz=cardhouzz:cardhouzz:5433:cardhouzz
 
