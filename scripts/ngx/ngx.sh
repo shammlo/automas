@@ -252,6 +252,7 @@ load_config() {
                 ;;
         esac
 
+        # Keep config values intentionally simple: paths with spaces are not supported.
         if [[ ! "$line" =~ ^[A-Z_]+=\"?[A-Za-z0-9_./:-]+\"?$ ]]; then
             log_warning "Ignoring invalid config line: $line"
             continue
@@ -405,10 +406,18 @@ parse_create_arguments() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -p|--port)
+                if [ $# -lt 2 ]; then
+                    log_error "Missing value for $1"
+                    exit 1
+                fi
                 CUSTOM_PORT="$2"
                 shift 2
                 ;;
             -t|--tld)
+                if [ $# -lt 2 ]; then
+                    log_error "Missing value for $1"
+                    exit 1
+                fi
                 CUSTOM_TLD="$2"
                 shift 2
                 ;;
@@ -421,6 +430,10 @@ parse_create_arguments() {
                 shift
                 ;;
             --api)
+                if [ $# -lt 2 ]; then
+                    log_error "Missing value for $1"
+                    exit 1
+                fi
                 API_PROXY="$2"
                 shift 2
                 ;;
@@ -724,6 +737,7 @@ update_nginx_runtime_user() {
     else
         local tmp_file
         tmp_file="$(mktemp)"
+        chmod 600 "$tmp_file"
         printf 'user %s;\n' "$runtime_user" > "$tmp_file"
         sudo cat "$NGINX_MAIN_CONF" >> "$tmp_file"
         sudo tee "$NGINX_MAIN_CONF" < "$tmp_file" >/dev/null
@@ -784,10 +798,14 @@ validate_port_combination() {
     local port="$1"
     local ssl_enabled="${2:-0}"
 
-    validate_port "$port"
+    if ! validate_port "$port"; then
+        return 1
+    fi
 
     if [ "$ssl_enabled" -eq 1 ]; then
-        validate_port "$DEFAULT_SSL_PORT"
+        if ! validate_port "$DEFAULT_SSL_PORT"; then
+            return 1
+        fi
         if [ "$port" -eq "$DEFAULT_SSL_PORT" ]; then
             log_error "HTTP port cannot match SSL port $DEFAULT_SSL_PORT when SSL is enabled."
             return 1
@@ -842,6 +860,23 @@ check_port_availability() {
 }
 
 #######################################
+# Check whether nginx appears to be managed by Homebrew
+#######################################
+is_brew_nginx() {
+    local brew_prefix
+    local nginx_path
+
+    if [[ "$(uname -s)" != "Darwin" ]] || ! command -v brew >/dev/null 2>&1 || ! command -v nginx >/dev/null 2>&1; then
+        return 1
+    fi
+
+    brew_prefix="$(brew --prefix 2>/dev/null || true)"
+    nginx_path="$(command -v nginx)"
+
+    [[ -n "$brew_prefix" && "$nginx_path" == "$brew_prefix"/* ]]
+}
+
+#######################################
 # Generate SSL certificate for domain
 # Arguments:
 #   $1 - Domain name
@@ -862,6 +897,7 @@ generate_ssl_certificate() {
     sudo mkdir -p "$cert_dir"
     sudo mkdir -p "$key_dir"
     csr_file="$(mktemp)"
+    trap 'rm -f "$csr_file"' ERR RETURN
     
     # Generate private key
     sudo openssl genrsa -out "$key_path" 2048
@@ -876,10 +912,43 @@ generate_ssl_certificate() {
     sudo chmod 600 "$key_path"
     sudo chmod 644 "$cert_path"
     
-    # Clean up CSR file
     rm -f "$csr_file"
+    trap - ERR RETURN
     
     log_success "SSL certificate generated for $domain"
+}
+
+#######################################
+# Reload nginx using the available service manager
+#######################################
+reload_nginx() {
+    if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files nginx.service >/dev/null 2>&1; then
+        sudo systemctl reload nginx
+        return $?
+    fi
+
+    if is_brew_nginx && brew services list 2>/dev/null | grep -Eq '^nginx[[:space:]]+started'; then
+        if brew services help 2>/dev/null | grep -q '^ *reload'; then
+            brew services reload nginx
+        else
+            brew services restart nginx
+        fi
+        return $?
+    fi
+
+    sudo nginx -s reload
+}
+
+#######################################
+# Test nginx configuration using the available nginx command
+#######################################
+test_nginx_config() {
+    if is_brew_nginx; then
+        nginx -t
+        return $?
+    fi
+
+    sudo nginx -t
 }
 
 #######################################
@@ -905,6 +974,42 @@ domain_exists_in_hosts() {
 }
 
 #######################################
+# Remove a local hosts entry with an exact domain match
+# Arguments:
+#   $1 - Domain name
+#   $2 - Hosts file path
+#######################################
+remove_domain_from_hosts() {
+    local domain="$1"
+    local hosts_file="$2"
+    local tmp_file
+
+    tmp_file="$(mktemp)"
+    trap 'rm -f "$tmp_file"' ERR RETURN
+
+    awk -v domain="$domain" '
+        {
+            remove_line = 0
+            if ($1 == "127.0.0.1") {
+                for (i = 2; i <= NF; i++) {
+                    if ($i == domain) {
+                        remove_line = 1
+                        break
+                    }
+                }
+            }
+            if (!remove_line) {
+                print
+            }
+        }
+    ' "$hosts_file" > "$tmp_file"
+
+    sudo tee "$hosts_file" < "$tmp_file" >/dev/null
+    rm -f "$tmp_file"
+    trap - ERR RETURN
+}
+
+#######################################
 # Update hosts file with domain
 # Arguments:
 #   $1 - Domain name
@@ -917,15 +1022,13 @@ update_hosts_file() {
     local domain="$1"
     local hosts_file="$2"
     local force_update="${3:-0}"
-    local domain_regex
-    domain_regex="$(escape_domain_regex "$domain")"
     
     # Check if domain already exists in hosts file
     if domain_exists_in_hosts "$domain" "$hosts_file"; then
         if [ "$force_update" -eq 1 ]; then
             log_info "Domain ${domain} exists in hosts file. Forcing update as requested."
             # Remove existing entry (match exact domain)
-            sudo sed -i -E "/127\.0\.0\.1[[:space:]]+${domain_regex}($|[[:space:]])/d" "$hosts_file"
+            remove_domain_from_hosts "$domain" "$hosts_file"
             # Add the domain to /etc/hosts
             echo "127.0.0.1 ${domain}" | sudo tee -a "$hosts_file" >/dev/null
             log_success "Updated ${domain} in hosts file."
@@ -989,7 +1092,8 @@ generate_nginx_config() {
     index index.html index.htm index.nginx-debian.html;
 "
     else
-        # HTTP only server block - only add listen directive if custom port is specified
+        # HTTP only server block.
+        # Nginx listens on port 80 by default, so the listen directive is only needed for custom ports.
         config_content+="server {
 "
         if [ "$port" != "80" ]; then
@@ -1025,22 +1129,12 @@ generate_nginx_config() {
     }
 "
     else
-        # Check if this looks like a SPA by examining the dist folder
-        if [ -f "$doc_root/index.html" ] && [ -d "$doc_root/assets" ]; then
-            # Likely a SPA build (has index.html and assets folder)
-            config_content+="    
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-"
-        else
-            # Standard static file serving
-            config_content+="    
+        # Standard static file serving. Use --spa to enable index.html fallback for client-side routing.
+        config_content+="    
     location / {
         try_files \$uri \$uri/ =404;
     }
 "
-        fi
     fi
     
     config_content+="}"
@@ -1149,8 +1243,8 @@ create_site() {
     update_hosts_file "$normalized_domain" "$HOSTS_FILE" "${FORCE_UPDATE:-0}"
     
     # Test and reload nginx
-    if sudo nginx -t; then
-        sudo systemctl reload nginx
+    if test_nginx_config; then
+        reload_nginx
         log_success "Nginx reloaded successfully"
         
         local protocol="http"
@@ -1178,7 +1272,7 @@ remove_site() {
     local config_file="$NGINX_CONF_DIR/${config_name}.conf"
     
     if [ "${DRY_RUN:-0}" -eq 1 ]; then
-        log_info "DRY RUN: Would remove site for $normalized_domain"
+        echo "DRY RUN: Would remove site for $normalized_domain"
         
         if [ -f "$config_file" ]; then
             log_info "DRY RUN: Would remove config file: $config_file"
@@ -1189,7 +1283,7 @@ remove_site() {
             fi
             
             # Check hosts file entry
-            if grep -q "127\.0\.0\.1[[:space:]]\+${normalized_domain}" "$HOSTS_FILE" 2>/dev/null; then
+            if domain_exists_in_hosts "$normalized_domain" "$HOSTS_FILE"; then
                 log_info "DRY RUN: Would remove hosts file entry"
             fi
         else
@@ -1225,16 +1319,14 @@ remove_site() {
     fi
     
     # Remove hosts file entry
-    local domain_regex
-    domain_regex="$(escape_domain_regex "$normalized_domain")"
-    if grep -Eq "127\.0\.0\.1[[:space:]]+${domain_regex}($|[[:space:]])" "$HOSTS_FILE" 2>/dev/null; then
+    if domain_exists_in_hosts "$normalized_domain" "$HOSTS_FILE"; then
         log_verbose "Removing hosts file entry"
-        sudo sed -i -E "/127\.0\.0\.1[[:space:]]+${domain_regex}($|[[:space:]])/d" "$HOSTS_FILE"
+        remove_domain_from_hosts "$normalized_domain" "$HOSTS_FILE"
     fi
     
     # Test and reload nginx
-    if sudo nginx -t; then
-        sudo systemctl reload nginx
+    if test_nginx_config; then
+        reload_nginx
         log_success "Nginx reloaded successfully"
     else
         log_warning "Nginx configuration test failed after removal"
@@ -1247,45 +1339,39 @@ remove_site() {
 # List all configured sites
 #######################################
 list_sites() {
-    local config_files
     local count=0
+    local config_file
+    local doc_root
+    local server_name
+    local ssl_status
     
     log_info "Configured Nginx sites:"
     echo
     
     # Find all .conf files in the nginx conf.d directory
     if [ -d "$NGINX_CONF_DIR" ]; then
-        config_files=$(find "$NGINX_CONF_DIR" -name "*.conf" -type f 2>/dev/null || true)
-        
-        if [ -n "$config_files" ]; then
-            while IFS= read -r config_file; do
-                if [ -f "$config_file" ]; then
-                    local filename
-                    filename=$(basename "$config_file" .conf)
-                    
-                    # Extract document root from config file
-                    local doc_root
-                    doc_root=$(grep -E "^\s*root\s+" "$config_file" | head -1 | awk '{print $2}' | sed 's/;//' || echo "Unknown")
-                    
-                    # Extract server_name from config file
-                    local server_name
-                    server_name=$(grep -E "^\s*server_name\s+" "$config_file" | head -1 | sed 's/^\s*server_name\s*//' | sed 's/;//' || echo "Unknown")
-                    
-                    # Check if SSL is configured
-                    local ssl_status=""
-                    if grep -q "ssl_certificate" "$config_file" 2>/dev/null; then
-                        ssl_status=" (SSL)"
-                    fi
-                    
-                    echo "  📁 $server_name$ssl_status"
-                    echo "     Path: $doc_root"
-                    echo "     Config: $config_file"
-                    echo
-                    
-                    count=$((count + 1))
+        while IFS= read -r config_file; do
+            if [ -f "$config_file" ]; then
+                # Extract document root from config file
+                doc_root=$(grep -E "^\s*root\s+" "$config_file" | head -1 | awk '{print $2}' | sed 's/;//' || echo "Unknown")
+                
+                # Extract server_name from config file
+                server_name=$(grep -E "^\s*server_name\s+" "$config_file" | head -1 | sed 's/^\s*server_name\s*//' | sed 's/;//' || echo "Unknown")
+                
+                # Check if SSL is configured
+                ssl_status=""
+                if grep -q "ssl_certificate" "$config_file" 2>/dev/null; then
+                    ssl_status=" (SSL)"
                 fi
-            done <<< "$config_files"
-        fi
+                
+                echo "  📁 $server_name$ssl_status"
+                echo "     Path: $doc_root"
+                echo "     Config: $config_file"
+                echo
+                
+                count=$((count + 1))
+            fi
+        done < <(find "$NGINX_CONF_DIR" -name "*.conf" -type f 2>/dev/null)
     fi
     
     if [ $count -eq 0 ]; then
