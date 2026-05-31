@@ -33,12 +33,12 @@ print_test_case() {
 test_start() {
     local test_name="$1"
     print_test_case "$test_name"
-    ((TOTAL_TESTS++))
 }
 
 test_pass() {
     local test_name="$1"
     echo -e "${GREEN}✅ PASS: $test_name${NC}"
+    ((TOTAL_TESTS++))
     ((PASSED_TESTS++))
 }
 
@@ -47,6 +47,7 @@ test_fail() {
     local reason="$2"
     echo -e "${RED}❌ FAIL: $test_name${NC}"
     echo -e "${RED}   Reason: $reason${NC}"
+    ((TOTAL_TESTS++))
     ((FAILED_TESTS++))
 }
 
@@ -55,10 +56,22 @@ assert_contains() {
     local needle="$2"
     local test_name="$3"
     
-    if echo "$haystack" | grep -q "$needle"; then
+    if echo "$haystack" | grep -q -- "$needle"; then
         test_pass "$test_name"
     else
         test_fail "$test_name" "Expected to find '$needle' in output"
+    fi
+}
+
+assert_not_contains() {
+    local haystack="$1"
+    local needle="$2"
+    local test_name="$3"
+    
+    if echo "$haystack" | grep -q -- "$needle"; then
+        test_fail "$test_name" "Did not expect to find '$needle' in output"
+    else
+        test_pass "$test_name"
     fi
 }
 
@@ -96,6 +109,7 @@ test_basic_functionality() {
     assert_contains "$output" "USAGE:" "Help shows usage information"
     assert_contains "$output" "OPTIONS:" "Help shows options section"
     assert_contains "$output" "FEATURES:" "Help shows features section"
+    assert_not_contains "$output" "--quiet" "Help does not advertise removed quiet option"
 
     test_start "Version command shows version"
     local output
@@ -113,23 +127,44 @@ test_argument_validation() {
     
     assert_exit_code 1 "${exit_code:-0}" "Invalid option exits with code 1"
     assert_contains "$output" "Unknown option" "Invalid option shows error"
+
+    test_start "Removed quiet option is rejected"
+    unset exit_code
+    output=$("$SCRIPT_PATH" --quiet 2>&1) || exit_code=$?
+
+    assert_exit_code 1 "${exit_code:-0}" "Quiet option exits with code 1"
+    assert_contains "$output" "Unknown option" "Quiet option shows unknown option error"
 }
 
 test_dependency_checks() {
     print_test_header "Dependency Check Tests"
     
-    test_start "Git dependency check"
-    if command -v git >/dev/null 2>&1; then
-        test_pass "Git is available for testing"
+    test_start "Script prompts for missing Git"
+    if grep -q 'ensure_dependency "git" "git" "Git"' "$SCRIPT_PATH"; then
+        test_pass "Git dependency is handled by installer prompt"
     else
-        test_fail "Git is available for testing" "Git not found - required for script functionality"
+        test_fail "Git dependency is handled by installer prompt" "Git dependency prompt not found"
     fi
     
-    test_start "Curl dependency check"
-    if command -v curl >/dev/null 2>&1; then
-        test_pass "Curl is available for testing"
+    test_start "Script prompts for missing curl"
+    if grep -q 'ensure_dependency "curl" "curl" "curl"' "$SCRIPT_PATH"; then
+        test_pass "curl dependency is handled by installer prompt"
     else
-        test_fail "Curl is available for testing" "Curl not found - required for script functionality"
+        test_fail "curl dependency is handled by installer prompt" "curl dependency prompt not found"
+    fi
+
+    test_start "Script avoids package install prompts in non-interactive shells"
+    if grep -q "Cannot prompt.*non-interactive shell" "$SCRIPT_PATH"; then
+        test_pass "Non-interactive dependency handling"
+    else
+        test_fail "Non-interactive dependency handling" "Non-interactive dependency guard not found"
+    fi
+
+    test_start "Script installs dependencies through package manager helper"
+    if grep -q "install_package" "$SCRIPT_PATH" && grep -q "run_privileged" "$SCRIPT_PATH"; then
+        test_pass "Dependency installation helpers present"
+    else
+        test_fail "Dependency installation helpers present" "Dependency installation helpers not found"
     fi
 }
 
@@ -204,6 +239,13 @@ test_safety_features() {
     else
         test_fail "Script includes backup functionality" "No backup functionality found"
     fi
+
+    test_start "Script uses command_exists helper"
+    if grep -q "^command_exists()" "$SCRIPT_PATH"; then
+        test_pass "Command existence helper present"
+    else
+        test_fail "Command existence helper present" "command_exists helper not found"
+    fi
 }
 
 test_interactive_features() {
@@ -253,6 +295,20 @@ test_plugin_support() {
         test_pass "fast-syntax-highlighting plugin supported"
     else
         test_fail "fast-syntax-highlighting plugin supported" "Plugin not found in script"
+    fi
+
+    test_start "Script stores selected plugins in an array"
+    if grep -Fq "ZSH_PLUGINS_SELECTED=()" "$SCRIPT_PATH" && grep -Fq 'for plugin in "${ZSH_PLUGINS_SELECTED[@]}"' "$SCRIPT_PATH"; then
+        test_pass "Plugin selection uses array"
+    else
+        test_fail "Plugin selection uses array" "Array-based plugin selection not found"
+    fi
+
+    test_start "Script warns about syntax highlighter conflicts"
+    if grep -q "can conflict when both are enabled" "$SCRIPT_PATH"; then
+        test_pass "Syntax highlighter conflict warning"
+    else
+        test_fail "Syntax highlighter conflict warning" "Conflict warning not found"
     fi
 }
 
@@ -335,10 +391,17 @@ test_backup_and_safety() {
     print_test_header "Backup and Safety Tests"
     
     test_start "Script creates timestamped backups"
-    if grep -q "backup.*date" "$SCRIPT_PATH"; then
+    if grep -q "backup_timestamp" "$SCRIPT_PATH" && grep -q "date +%Y%m%d_%H%M%S" "$SCRIPT_PATH"; then
         test_pass "Timestamped backup creation"
     else
         test_fail "Timestamped backup creation" "Timestamped backup not found"
+    fi
+
+    test_start "Script reuses exact backup path in output"
+    if grep -q 'Backup created: \$backup_path' "$SCRIPT_PATH"; then
+        test_pass "Backup message uses stored path"
+    else
+        test_fail "Backup message uses stored path" "Stored backup path message not found"
     fi
     
     test_start "Script checks for existing installations"
@@ -431,7 +494,7 @@ test_plugin_installation_logic() {
     fi
     
     test_start "Script handles plugin selection properly"
-    if grep -q "ZSH_PLUGINS_SELECTED" "$SCRIPT_PATH"; then
+    if grep -Fq 'ZSH_PLUGINS_SELECTED+=(' "$SCRIPT_PATH"; then
         test_pass "Plugin selection handling"
     else
         test_fail "Plugin selection handling" "Plugin selection not found"
@@ -445,10 +508,17 @@ test_plugin_installation_logic() {
     fi
     
     test_start "Script updates .zshrc with selected plugins"
-    if grep -q "plugins=(git" "$SCRIPT_PATH"; then
+    if grep -q "build_plugins_line" "$SCRIPT_PATH"; then
         test_pass ".zshrc plugin configuration"
     else
         test_fail ".zshrc plugin configuration" "Plugin configuration not found"
+    fi
+
+    test_start "Script uses safer sed delimiter for plugin line"
+    if grep -Fq 'sed_inplace "s|^plugins=.*|$plugins_line|"' "$SCRIPT_PATH"; then
+        test_pass "Safer plugin sed delimiter"
+    else
+        test_fail "Safer plugin sed delimiter" "Safer sed delimiter not found"
     fi
 }
 
@@ -513,6 +583,20 @@ test_configuration_options() {
         test_pass "Interactive plugin selection"
     else
         test_fail "Interactive plugin selection" "Plugin selection not found"
+    fi
+
+    test_start "Script uses command -v zsh for shell path"
+    if grep -Fq 'chsh -s "$(command -v zsh)"' "$SCRIPT_PATH"; then
+        test_pass "Portable zsh path lookup"
+    else
+        test_fail "Portable zsh path lookup" "command -v zsh not found in chsh call"
+    fi
+
+    test_start "Script does not use which for zsh lookup"
+    if grep -Fq 'which zsh' "$SCRIPT_PATH"; then
+        test_fail "No which zsh usage" "which zsh is still used"
+    else
+        test_pass "No which zsh usage"
     fi
 }
 

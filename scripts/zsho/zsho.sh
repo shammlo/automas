@@ -23,8 +23,7 @@ INSTALL_OH_MY_ZSH=false
 ZSH_THEME="robbyrussell"
 ZSH_DEFAULT=false
 INSTALL_ZSH_PLUGINS=false
-ZSH_PLUGINS_SELECTED=""
-SELECTIONS=()
+ZSH_PLUGINS_SELECTED=()
 
 # OS Detection - set once at startup
 IS_MACOS=false
@@ -59,7 +58,10 @@ sed_inplace() {
 # Print script banner
 #######################################
 show_banner() {
-    clear
+    if command_exists clear && [ -n "${TERM:-}" ] && [ "$TERM" != "dumb" ]; then
+        clear
+    fi
+
     print_color "$CYAN" "
 ╔════════════════════════════════════════════════════════════╗
 ║                                                            ║
@@ -91,7 +93,6 @@ show_help() {
     echo "  -h, --help     Show this help message"
     echo "  -v, --version  Show version information"
     echo "  --dry-run      Show what would be installed without executing"
-    echo "  --quiet        Minimal output"
     echo
     print_color "$BOLD" "FEATURES:"
     echo "  • Automatic Zsh installation"
@@ -121,6 +122,179 @@ command_exists() {
 }
 
 #######################################
+# Run a command with sudo when needed
+#######################################
+run_privileged() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    elif command_exists sudo; then
+        sudo "$@"
+    else
+        print_color "$RED" "❌ sudo is required to install packages. Please install sudo or run this script as root."
+        exit 1
+    fi
+}
+
+#######################################
+# Install a package with the available package manager
+#######################################
+install_package() {
+    local package="$1"
+
+    if command_exists apt; then
+        run_privileged apt update
+        run_privileged apt install -y "$package"
+    elif command_exists yum; then
+        run_privileged yum install -y "$package"
+    elif command_exists dnf; then
+        run_privileged dnf install -y "$package"
+    elif command_exists pacman; then
+        run_privileged pacman -S --noconfirm "$package"
+    elif command_exists brew; then
+        brew install "$package"
+    else
+        print_color "$RED" "❌ No supported package manager found. Please install $package manually."
+        exit 1
+    fi
+}
+
+#######################################
+# Ask before installing a missing dependency
+#######################################
+ensure_dependency() {
+    local command_name="$1"
+    local package_name="${2:-$command_name}"
+    local display_name="${3:-$command_name}"
+    local answer
+
+    if command_exists "$command_name"; then
+        return 0
+    fi
+
+    print_color "$YELLOW" "⚠️  $display_name is required but not installed."
+
+    if [ ! -t 0 ]; then
+        print_color "$RED" "❌ Cannot prompt to install $display_name in a non-interactive shell."
+        print_color "$YELLOW" "Please install $display_name and run this script again."
+        exit 1
+    fi
+
+    read -p "📦 Install $display_name now? (y/N): " -r answer
+
+    if ! echo "$answer" | grep -iq "^y"; then
+        print_color "$RED" "❌ Cannot continue without $display_name. Please install it and run this script again."
+        exit 1
+    fi
+
+    show_progress "Installing $display_name..."
+    install_package "$package_name"
+
+    if ! command_exists "$command_name"; then
+        print_color "$RED" "❌ $display_name still was not found after installation. Please install it manually."
+        exit 1
+    fi
+
+    install_component "$display_name"
+}
+
+#######################################
+# Build the plugins= value for .zshrc
+#######################################
+build_plugins_line() {
+    local plugin
+    local plugins_line="plugins=(git"
+
+    for plugin in "$@"; do
+        plugins_line+=" $plugin"
+    done
+
+    plugins_line+=")"
+    echo "$plugins_line"
+}
+
+#######################################
+# Warn if both syntax highlighters are selected
+#######################################
+resolve_syntax_highlighter_conflict() {
+    local choice
+    local has_syntax_highlighting=false
+    local has_fast_syntax_highlighting=false
+    local both_syntax_highlighters_selected=false
+    local plugin
+
+    for plugin in "${ZSH_PLUGINS_SELECTED[@]}"; do
+        case "$plugin" in
+            "zsh-syntax-highlighting") has_syntax_highlighting=true ;;
+            "zsh-fast-syntax-highlighting") has_fast_syntax_highlighting=true ;;
+        esac
+    done
+
+    if [ "$has_syntax_highlighting" = true ] && [ "$has_fast_syntax_highlighting" = true ]; then
+        both_syntax_highlighters_selected=true
+    fi
+
+    if [ "$both_syntax_highlighters_selected" != true ]; then
+        return 0
+    fi
+
+    print_color "$YELLOW" "⚠️  zsh-syntax-highlighting and fast-syntax-highlighting can conflict when both are enabled."
+
+    if [ ! -t 0 ]; then
+        print_color "$YELLOW" "   Keeping zsh-syntax-highlighting and removing fast-syntax-highlighting."
+        remove_selected_plugin "zsh-fast-syntax-highlighting"
+        return 0
+    fi
+
+    echo "   1) Keep zsh-syntax-highlighting (default)"
+    echo "   2) Keep fast-syntax-highlighting"
+    echo "   3) Keep both anyway"
+    read -p "   Choose syntax highlighter option (1-3): " choice
+
+    case "${choice:-1}" in
+        2)
+            remove_selected_plugin "zsh-syntax-highlighting"
+            ;;
+        3)
+            print_color "$YELLOW" "   └── Keeping both syntax highlighters."
+            ;;
+        *)
+            remove_selected_plugin "zsh-fast-syntax-highlighting"
+            ;;
+    esac
+}
+
+#######################################
+# Remove a plugin from selected plugins
+#######################################
+remove_selected_plugin() {
+    local plugin_to_remove="$1"
+    local plugin
+    local filtered_plugins=()
+
+    for plugin in "${ZSH_PLUGINS_SELECTED[@]}"; do
+        if [ "$plugin" != "$plugin_to_remove" ]; then
+            filtered_plugins+=("$plugin")
+        fi
+    done
+
+    ZSH_PLUGINS_SELECTED=("${filtered_plugins[@]}")
+}
+
+#######################################
+# Print selected plugins as a readable list
+#######################################
+selected_plugins_display() {
+    local plugin
+    local display=""
+
+    for plugin in "${ZSH_PLUGINS_SELECTED[@]}"; do
+        display+="${display:+ }$plugin"
+    done
+
+    echo "$display"
+}
+
+#######################################
 # Show progress message
 #######################################
 show_progress() {
@@ -142,25 +316,7 @@ install_component() {
 install_zsh() {
     # Install Zsh if not already installed
     if ! command_exists zsh; then
-        print_color "$BLUE" "📦 Installing Zsh..."
-        
-        # Detect package manager and install
-        if command_exists apt; then
-            sudo apt update && sudo apt install -y zsh
-        elif command_exists yum; then
-            sudo yum install -y zsh
-        elif command_exists dnf; then
-            sudo dnf install -y zsh
-        elif command_exists pacman; then
-            sudo pacman -S --noconfirm zsh
-        elif command_exists brew; then
-            brew install zsh
-        else
-            print_color "$RED" "❌ No supported package manager found. Please install Zsh manually."
-            exit 1
-        fi
-        
-        install_component "Zsh"
+        ensure_dependency "zsh" "zsh" "Zsh"
     else
         print_color "$YELLOW" "⚠️  Zsh is already installed, skipping installation."
     fi
@@ -186,8 +342,8 @@ install_zsh() {
     # Set as default shell if requested
     CURRENT_SHELL=$(basename "$SHELL")
     if [ "$ZSH_DEFAULT" = true ] && [ "$CURRENT_SHELL" != "zsh" ]; then
-        chsh -s "$(which zsh)"
         show_progress "Setting Zsh as default shell..."
+        chsh -s "$(command -v zsh)"
         print_color "$GREEN" "✅ Zsh is now your default shell"
     elif [ "$ZSH_DEFAULT" = true ]; then
         print_color "$YELLOW" "⚠️  Zsh is already your default shell."
@@ -201,7 +357,7 @@ install_zsh() {
         # Ensure Oh My Zsh custom plugins directory exists
         mkdir -p "$ZSH_CUSTOM/plugins"
         
-        for plugin in $ZSH_PLUGINS_SELECTED; do
+        for plugin in "${ZSH_PLUGINS_SELECTED[@]}"; do
             case "$plugin" in
                 "Auto-Suggestions")
                     PLUGIN_PATH="$ZSH_CUSTOM/plugins/zsh-autosuggestions"
@@ -252,20 +408,28 @@ install_zsh() {
 
         # Update .zshrc with plugins
         if [ ${#PLUGINS_TO_ADD[@]} -gt 0 ] && [ -f "$HOME/.zshrc" ]; then
+            local backup_timestamp
+            local backup_path
+            local plugins_line
+
+            backup_timestamp="$(date +%Y%m%d_%H%M%S)"
+            backup_path="$HOME/.zshrc.backup.$backup_timestamp"
+            plugins_line="$(build_plugins_line "${PLUGINS_TO_ADD[@]}")"
+
             # Create a backup of .zshrc
-            cp "$HOME/.zshrc" "$HOME/.zshrc.backup.$(date +%Y%m%d_%H%M%S)"
+            cp "$HOME/.zshrc" "$backup_path"
             
             # Check if plugins line exists and update it
             if grep -q "^plugins=" "$HOME/.zshrc"; then
                 # Replace existing plugins line
-                sed_inplace "s/^plugins=.*/plugins=(git ${PLUGINS_TO_ADD[*]})/" "$HOME/.zshrc"
+                sed_inplace "s|^plugins=.*|$plugins_line|" "$HOME/.zshrc"
             else
                 # Add plugins line if it doesn't exist
-                echo "plugins=(git ${PLUGINS_TO_ADD[*]})" >> "$HOME/.zshrc"
+                echo "$plugins_line" >> "$HOME/.zshrc"
             fi
             
-            print_color "$GREEN" "✅ Added plugins to .zshrc: git ${PLUGINS_TO_ADD[*]}"
-            print_color "$CYAN" "💾 Backup created: ~/.zshrc.backup.$(date +%Y%m%d_%H%M%S)"
+            print_color "$GREEN" "✅ Added plugins to .zshrc: $plugins_line"
+            print_color "$CYAN" "💾 Backup created: $backup_path"
             print_color "$YELLOW" "⚠️  You will need to restart your terminal or run 'exec zsh' to use the new plugins"
         fi
     elif [ "$INSTALL_ZSH_PLUGINS" = true ] && [ "$INSTALL_OH_MY_ZSH" = false ]; then
@@ -287,7 +451,7 @@ install_zsh() {
         
         # Check if plugin directories exist
         ZSH_CUSTOM=${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}
-        for plugin in $ZSH_PLUGINS_SELECTED; do
+        for plugin in "${ZSH_PLUGINS_SELECTED[@]}"; do
             case "$plugin" in
                 "Auto-Suggestions")
                     [ -d "$ZSH_CUSTOM/plugins/zsh-autosuggestions" ] && print_color "$GREEN" "✅ zsh-autosuggestions directory exists" || print_color "$RED" "❌ zsh-autosuggestions directory missing"
@@ -313,7 +477,6 @@ install_zsh() {
 #######################################
 configure_zsh() {
     print_color "$GREEN" "✅ Zsh will be installed"
-    SELECTIONS+=("zsh")
     
     echo
     # Ask about Oh My Zsh
@@ -365,19 +528,21 @@ configure_zsh() {
         plugin_choices=${plugin_choices:-all}
         
         if [[ "$plugin_choices" == *"all"* ]]; then
-            ZSH_PLUGINS_SELECTED="Auto-Suggestions zsh-syntax-highlighting zsh-fast-syntax-highlighting zsh-autocomplete"
+            ZSH_PLUGINS_SELECTED=("Auto-Suggestions" "zsh-syntax-highlighting" "zsh-autocomplete")
         else
-            ZSH_PLUGINS_SELECTED=""
+            ZSH_PLUGINS_SELECTED=()
             for choice in $plugin_choices; do
                 case $choice in
-                    1) ZSH_PLUGINS_SELECTED+="Auto-Suggestions " ;;
-                    2) ZSH_PLUGINS_SELECTED+="zsh-syntax-highlighting " ;;
-                    3) ZSH_PLUGINS_SELECTED+="zsh-fast-syntax-highlighting " ;;
-                    4) ZSH_PLUGINS_SELECTED+="zsh-autocomplete " ;;
+                    1) ZSH_PLUGINS_SELECTED+=("Auto-Suggestions") ;;
+                    2) ZSH_PLUGINS_SELECTED+=("zsh-syntax-highlighting") ;;
+                    3) ZSH_PLUGINS_SELECTED+=("zsh-fast-syntax-highlighting") ;;
+                    4) ZSH_PLUGINS_SELECTED+=("zsh-autocomplete") ;;
                 esac
             done
         fi
-        print_color "$YELLOW" "   └── • Plugins: $ZSH_PLUGINS_SELECTED"
+
+        resolve_syntax_highlighter_conflict
+        print_color "$YELLOW" "   └── • Plugins: $(selected_plugins_display)"
     fi
 }
 
@@ -386,7 +551,6 @@ configure_zsh() {
 #######################################
 main() {
     local DRY_RUN=false
-    local QUIET_MODE=false
     
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
@@ -402,9 +566,6 @@ main() {
             --dry-run)
                 DRY_RUN=true
                 print_color "$YELLOW" "🧪 DRY RUN MODE - No changes will be made"
-                ;;
-            --quiet)
-                QUIET_MODE=true
                 ;;
             *)
                 print_color "$RED" "Unknown option: $1"
@@ -424,20 +585,10 @@ main() {
         exit 1
     fi
 
-    # Check for required dependencies
-    if ! command_exists git; then
-        print_color "$RED" "❌ Git is required but not installed. Please install Git first."
-        exit 1
-    fi
-
-    if ! command_exists curl; then
-        print_color "$RED" "❌ curl is required but not installed. Please install curl first."
-        exit 1
-    fi
-
     # Handle dry-run mode
     if [ "$DRY_RUN" = true ]; then
         print_color "$CYAN" "🧪 DRY RUN: Would perform the following actions:"
+        print_color "$YELLOW" "   • Check required dependencies and prompt to install missing ones"
         print_color "$YELLOW" "   • Check and install Zsh if not present"
         print_color "$YELLOW" "   • Install Oh My Zsh framework"
         print_color "$YELLOW" "   • Configure theme and plugins"
@@ -447,6 +598,10 @@ main() {
         print_color "$GREEN" "✅ Dry run completed - no actual changes made"
         exit 0
     fi
+
+    # Check for required dependencies
+    ensure_dependency "git" "git" "Git"
+    ensure_dependency "curl" "curl" "curl"
 
     # Start interactive configuration
     print_color "$BLUE" "🚀 Starting Zsh setup wizard..."
@@ -460,7 +615,7 @@ main() {
     print_color "$YELLOW" "   • Install Zsh: Yes"
     print_color "$YELLOW" "   • Install Oh My Zsh: $([ "$INSTALL_OH_MY_ZSH" = true ] && echo "Yes ($ZSH_THEME theme)" || echo "No")"
     print_color "$YELLOW" "   • Set as default shell: $([ "$ZSH_DEFAULT" = true ] && echo "Yes" || echo "No")"
-    print_color "$YELLOW" "   • Install plugins: $([ "$INSTALL_ZSH_PLUGINS" = true ] && echo "Yes ($ZSH_PLUGINS_SELECTED)" || echo "No")"
+    print_color "$YELLOW" "   • Install plugins: $([ "$INSTALL_ZSH_PLUGINS" = true ] && echo "Yes ($(selected_plugins_display))" || echo "No")"
     echo
     echo
 
