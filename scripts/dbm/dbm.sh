@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Location of the external config file (relative to script location)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -6,13 +7,14 @@ PROJECT_CONFIG_FILE="$SCRIPT_DIR/.dbmrc"
 DEBUG_MODE=false # Set to true to enable debug logs
 
 # Supported config formats:
-# Format 1: user:port:database (password via PGPASSWORD env var)
-# Format 2: user:password:port:database (password in config - less secure)
-# Format 3: user:port:database:host (custom host)
-# Format 4: user:password:port:database:host (full config)
-# Format 5: connection_string (full PostgreSQL connection URI)
-# Format 6: user:port:database:host:ssl_mode (with SSL configuration)
-# Format 7: user:port:database:host:ssl_mode:cert_path (with client certificates)
+# Format 1: user:port:database (legacy, password via .pgpass/PGPASSWORD/prompt)
+# Format 2: user::port:database (password via .pgpass/PGPASSWORD/prompt)
+# Format 3: user:password:port:database (password in config - less secure)
+# Format 4: user:password:port:database:host (custom host)
+# Format 5: user:password:port:database:host:sslmode (with SSL)
+# Format 6: user:password:port:database:host:sslmode:cert_path (with client cert)
+# Format 7: postgres://user:pass@host:port/db?sslmode=require (full URI)
+# Format 8: postgres://user:pass@host:port/db?sslmode=require&sslcert=/path/cert
 
 # Error handling
 error_exit() {
@@ -21,23 +23,116 @@ error_exit() {
 }
 
 # Check if debug is enabled at the start
-if [[ "$1" == "--debug" ]]; then
+if [[ "${1:-}" == "--debug" ]]; then
     DEBUG_MODE=true
     shift
 fi
 
 # Load projects config from file into associative array
 declare -A PROJECT_CONFIGS=()
+declare -a PG_CMD=()
+
+validate_project_name() {
+    local project_name="$1"
+
+    if [[ ! "$project_name" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        error_exit "❌ Invalid project name '$project_name'. Use letters, numbers, hyphens, and underscores only."
+    fi
+}
+
+validate_config_string() {
+    local config_string="$1"
+
+    [[ "$config_string" =~ ^[^:]+:[^:]*:[0-9]+:[^:]+(:.*)*$ ]] || [[ "$config_string" =~ ^[^:]+:[0-9]+:[^:]+$ ]] || [[ "$config_string" =~ ^postgres(ql)?:// ]]
+}
+
+mask_config() {
+    local config="$1"
+    local parts
+
+    if [[ "$config" =~ ^postgres(ql)?:// ]]; then
+        printf '%s\n' "$config" | sed -E 's#^(postgres(ql)?://[^:/@]+:)[^@]*@#\1****@#'
+        return 0
+    fi
+
+    IFS=':' read -r -a parts <<< "$config"
+    if [ "${#parts[@]}" -ge 4 ]; then
+        parts[1]="****"
+        (IFS=':'; echo "${parts[*]}")
+    else
+        echo "$config"
+    fi
+}
+
+read_project_config_value() {
+    local project_name="$1"
+    local line key value
+
+    if [[ ! -f "$PROJECT_CONFIG_FILE" ]]; then
+        return 1
+    fi
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" != *=* ]] && continue
+        key="${line%%=*}"
+        value="${line#*=}"
+
+        if [[ "$key" == "$project_name" ]]; then
+            echo "$value"
+            return 0
+        fi
+    done < "$PROJECT_CONFIG_FILE"
+
+    return 1
+}
+
+project_config_exists() {
+    local project_name="$1"
+
+    read_project_config_value "$project_name" >/dev/null
+}
+
+remove_project_config_entry() {
+    local project_name="$1"
+    local temp_file
+    local line key
+
+    temp_file="$(mktemp)"
+    trap 'rm -f "$temp_file"' ERR RETURN
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" == *=* ]]; then
+            key="${line%%=*}"
+            if [[ "$key" == "$project_name" ]]; then
+                continue
+            fi
+        fi
+        printf '%s\n' "$line"
+    done < "$PROJECT_CONFIG_FILE" > "$temp_file"
+
+    mv "$temp_file" "$PROJECT_CONFIG_FILE"
+    trap - ERR RETURN
+}
 
 load_project_configs() {
     if [[ -f "$PROJECT_CONFIG_FILE" ]]; then
-        while IFS='=' read -r key value; do
+        local line key value
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ "$line" != *=* ]] && continue
+            key="${line%%=*}"
+            value="${line#*=}"
+
             # Ignore empty lines and comments
-            [[ -z "$key" || "$key" =~ ^\s*# ]] && continue
+            [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+
+            if [[ ! "$key" =~ ^[A-Za-z0-9_-]+$ ]]; then
+                echo "⚠️  Skipping invalid project name in config: $key"
+                continue
+            fi
             
             # Validate format - support multiple formats including URIs and legacy format
-            if ! [[ "$value" =~ ^[^:]+:[^:]*:[0-9]+:[^:]+(:.*)*$ ]] && ! [[ "$value" =~ ^[^:]+:[0-9]+:[^:]+$ ]] && ! [[ "$value" =~ ^postgres(ql)?:// ]]; then
-                echo "⚠️  Skipping invalid config line: $key=$value"
+            if ! validate_config_string "$value"; then
+                echo "⚠️  Skipping invalid config line: $key=$(mask_config "$value")"
                 echo "   Expected formats: user:password:port:db[:host[:ssl[:cert]]], user:port:db (legacy), or postgres://..."
                 continue
             fi
@@ -69,14 +164,15 @@ load_project_configs() {
 # Try to get project config: first from file, then from environment variables
 get_project_config() {
     local project_name="$1"
+    validate_project_name "$project_name"
     [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 get_project_config called with project_name: '$project_name'"
     
-    local config="${PROJECT_CONFIGS[$project_name]}"
-    [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 PROJECT_CONFIGS[$project_name] = '$config'"
+    local config="${PROJECT_CONFIGS[$project_name]:-}"
+    [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 PROJECT_CONFIGS[$project_name] = '$(mask_config "$config")'"
     
     if [[ -z "$config" ]]; then
         local p_upper
-        p_upper=$(echo "$project_name" | tr '[:lower:]' '[:upper:]')
+        p_upper=$(echo "$project_name" | tr '[:lower:]-' '[:upper:]_')
         [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 Looking for env vars using prefix: '$p_upper'"
         
         local user_var="${p_upper}_USER"
@@ -85,10 +181,10 @@ get_project_config() {
         local db_var="${p_upper}_DB"
         local host_var="${p_upper}_HOST"
         
-        local user="${!user_var}"
-        local password="${!password_var}"
-        local port="${!port_var}"
-        local db="${!db_var}"
+        local user="${!user_var:-}"
+        local password="${!password_var:-}"
+        local port="${!port_var:-}"
+        local db="${!db_var:-}"
         local host="${!host_var:-localhost}"
         
         [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 Values found: $user_var=$user, $password_var=[HIDDEN], $port_var=$port, $db_var=$db, $host_var=$host"
@@ -100,7 +196,7 @@ get_project_config() {
             error_exit "🔍 Missing config for '$project_name'. Define it in env or $PROJECT_CONFIG_FILE"
         fi
     else
-        [[ "$DEBUG_MODE" == true ]] && echo >&2 "✅ Loaded config from file: $config"
+        [[ "$DEBUG_MODE" == true ]] && echo >&2 "✅ Loaded config from file: $(mask_config "$config")"
     fi
     
     echo "$config"
@@ -136,14 +232,14 @@ Syntax: dbm [--debug] <action> <project_name> [<file_path>] [options]
 🏗️  Configuration Methods:
 
   📁 Config File (.dbmrc in script directory):
-    Format 1: user::port:database (password via PGPASSWORD env var)
-    Format 2: user:password:port:database (password in config)
-    Format 3: user:password:port:database:host (custom host)
-    Format 4: user:password:port:database:host:sslmode (with SSL)
-    Format 5: user:password:port:database:host:sslmode:cert_path (with client cert)
-    Format 6: postgres://user:pass@host:port/db?sslmode=require (full URI)
-    Format 7: postgres://user:pass@host:port/db?sslmode=require&sslcert=/path/cert (URI with SSL cert)
-    Format 8: postgres://username%40server:password@server.postgres.database.azure.com:5432/database?sslmode=require (Azure PostgreSQL)
+    Format 1: user:port:database (legacy, password via .pgpass/PGPASSWORD/prompt)
+    Format 2: user::port:database (password via .pgpass/PGPASSWORD/prompt)
+    Format 3: user:password:port:database (password in config)
+    Format 4: user:password:port:database:host (custom host)
+    Format 5: user:password:port:database:host:sslmode (with SSL)
+    Format 6: user:password:port:database:host:sslmode:cert_path (with client cert)
+    Format 7: postgres://user:pass@host:port/db?sslmode=require (full URI)
+    Format 8: postgres://user:pass@host:port/db?sslmode=require&sslcert=/path/cert (URI with SSL cert)
   
   🌍 Environment Variables:
     PROJECT_USER, PROJECT_PASSWORD, PROJECT_PORT, PROJECT_DB, PROJECT_HOST
@@ -235,12 +331,13 @@ parse_config() {
     case ${#parts[@]} in
         3) # user:port:database (legacy format - password same as username)
             username="${parts[0]}"
-            password="${parts[0]}"  # Use username as password for legacy compatibility
+            password=""
             port="${parts[1]}"
             database="${parts[2]}"
             host="localhost"
             ssl_mode=""
             cert_path=""
+            echo "⚠️  Legacy config format for '$username' has no password; using .pgpass, PGPASSWORD, or interactive prompt." >&2
             ;;
         4) # user:password:port:database
             username="${parts[0]}"
@@ -285,7 +382,7 @@ parse_config() {
     
     # If no password in config, try PGPASSWORD env var
     if [[ -z "$password" ]]; then
-        if [[ -n "$PGPASSWORD" ]]; then
+        if [[ -n "${PGPASSWORD:-}" ]]; then
             password="$PGPASSWORD"
         fi
     fi
@@ -303,8 +400,12 @@ parse_connection_string() {
     uri="${uri#postgresql://}"
     
     # Extract user:password@host:port/database
-    local user_pass_host_port_db="${uri%%\?*}"
-    local query_params="${uri#*\?}"
+    local user_pass_host_port_db="$uri"
+    local query_params=""
+    if [[ "$uri" == *\?* ]]; then
+        user_pass_host_port_db="${uri%%\?*}"
+        query_params="${uri#*\?}"
+    fi
     
     # Parse user:password@host:port/database
     if [[ "$user_pass_host_port_db" =~ ^([^:]+):([^@]+)@(.+)$ ]]; then
@@ -356,65 +457,117 @@ parse_connection_string() {
     }
 }
 
-# Build PostgreSQL connection command with all options
-build_psql_command() {
+# Build PostgreSQL connection command with all options into PG_CMD.
+# PG_CMD is intentionally global because Bash cannot return arrays directly.
+# Call build_pg_command immediately before run_pg_command/run_pg_command_timeout.
+build_pg_command() {
     local base_cmd="$1"  # psql or pg_dump
-    local extra_args="$2"  # Additional arguments like -f for psql or --clean for pg_dump
-    
-    local cmd="$base_cmd"
+    shift
+
+    PG_CMD=("$base_cmd")
     
     # Add user
-    [[ -n "$username" ]] && cmd="$cmd -U $username"
+    [[ -n "$username" ]] && PG_CMD+=("-U" "$username")
     
     # Add database
-    [[ -n "$database" ]] && cmd="$cmd -d $database"
+    [[ -n "$database" ]] && PG_CMD+=("-d" "$database")
     
     # Add host (always add -h to force TCP/IP connections)
-    [[ -n "$host" ]] && cmd="$cmd -h $host"
+    [[ -n "$host" ]] && PG_CMD+=("-h" "$host")
     
     # Add port
-    [[ -n "$port" ]] && cmd="$cmd -p $port"
+    [[ -n "$port" ]] && PG_CMD+=("-p" "$port")
     
-    # Add SSL mode
     if [[ -n "$ssl_mode" ]]; then
         case "$ssl_mode" in
-            "disable"|"allow"|"prefer"|"require"|"verify-ca"|"verify-full")
-                cmd="$cmd --set=sslmode=$ssl_mode"
-                ;;
+            "disable"|"allow"|"prefer"|"require"|"verify-ca"|"verify-full") ;;
             *)
                 echo "⚠️  Warning: Invalid SSL mode '$ssl_mode', using default" >&2
+                ssl_mode=""
                 ;;
         esac
     fi
     
     # Add client certificate path
     if [[ -n "$cert_path" ]]; then
-        if [[ -f "$cert_path" ]]; then
-            cmd="$cmd --set=sslcert=$cert_path"
-        else
+        if [[ ! -f "$cert_path" ]]; then
             echo "⚠️  Warning: SSL certificate file not found: $cert_path" >&2
+            cert_path=""
         fi
     fi
     
     # Add extra arguments
-    [[ -n "$extra_args" ]] && cmd="$cmd $extra_args"
+    [[ $# -gt 0 ]] && PG_CMD+=("$@")
+}
+
+build_pg_env() {
+    PG_ENV=()
+
+    [[ -n "${ssl_mode:-}" ]] && PG_ENV+=("PGSSLMODE=$ssl_mode")
+    [[ -n "${cert_path:-}" ]] && PG_ENV+=("PGSSLCERT=$cert_path")
+    [[ -n "${password:-}" ]] && PG_ENV+=("PGPASSWORD=$password")
+}
+
+debug_command() {
+    local arg
+
+    for arg in "$@"; do
+        printf '%q ' "$arg" >&2
+    done
+    echo >&2
+}
+
+run_pg_command() {
+    local PG_ENV=()
+    build_pg_env
+
+    if [[ ${#PG_ENV[@]} -gt 0 ]]; then
+        env "${PG_ENV[@]}" "$@"
+    else
+        "$@"
+    fi
+}
+
+run_pg_command_timeout() {
+    local seconds="$1"
+    shift
+    local PG_ENV=()
+    build_pg_env
     
-    echo "$cmd"
+    if [[ ${#PG_ENV[@]} -gt 0 ]]; then
+        timeout "$seconds" env "${PG_ENV[@]}" "$@"
+    else
+        timeout "$seconds" "$@"
+    fi
 }
 
 # Check for .pgpass file and use it if available
 check_pgpass() {
     local pgpass_file="$HOME/.pgpass"
-    
+    local pg_host pg_port pg_db pg_user
+    local perms
+
     if [[ -f "$pgpass_file" ]]; then
         [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 Found .pgpass file at $pgpass_file"
+
+        perms="$(stat -c '%a' "$pgpass_file" 2>/dev/null || stat -f '%A' "$pgpass_file" 2>/dev/null || echo "")"
+        if [[ "$perms" != "600" ]]; then
+            [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 Ignoring .pgpass because permissions are '$perms' instead of 600"
+            return 1
+        fi
         
         # Check if there's a matching entry in .pgpass
         # Format: hostname:port:database:username:password
-        if grep -q "^$host:$port:$database:$username:" "$pgpass_file" 2>/dev/null; then
-            [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 Found matching .pgpass entry"
-            return 0
-        fi
+        while IFS=':' read -r pg_host pg_port pg_db pg_user _ || [[ -n "${pg_host:-}" ]]; do
+            [[ -z "${pg_host:-}" || "$pg_host" =~ ^# ]] && continue
+            if [[ ("$pg_host" == "*" || "$pg_host" == "$host") &&
+                  ("$pg_port" == "*" || "$pg_port" == "$port") &&
+                  ("$pg_db" == "*" || "$pg_db" == "$database") &&
+                  ("$pg_user" == "*" || "$pg_user" == "$username") ]]; then
+                [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 Found matching .pgpass entry"
+                return 0
+            fi
+        done < "$pgpass_file"
     fi
     
     return 1
@@ -426,6 +579,7 @@ reset_database() {
     local file_path="$2"
     
     [[ -z "$file_path" ]] && error_exit "📂 Reset requires a SQL file path."
+    [[ "$file_path" == "~"* ]] && file_path="${file_path/#\~/$HOME}"
     [[ ! -f "$file_path" ]] && error_exit "📂 SQL file not found: $file_path"
     
     local config username password port database host ssl_mode cert_path
@@ -440,34 +594,24 @@ reset_database() {
     echo "🔄 Resetting database '$database' for project '$project_name'..."
     
     # Check for .pgpass first (most secure)
-    local use_pgpass=false
     if check_pgpass; then
-        use_pgpass=true
+        password=""
         echo "🔐 Using .pgpass for authentication"
     elif [[ -n "$password" ]]; then
-        export PGPASSWORD="$password"
         echo "🔑 Using password from configuration"
     else
         echo "🔍 No password found - will prompt for authentication"
     fi
     
     # Build and execute the command
-    local psql_cmd
-    psql_cmd=$(build_psql_command "psql" "-f $file_path")
+    build_pg_command "psql" "-f" "$file_path"
     
-    [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 Executing: $psql_cmd"
+    [[ "$DEBUG_MODE" == true ]] && { echo >&2 "🧪 Executing:"; debug_command "${PG_CMD[@]}"; }
     
-    eval "$psql_cmd"
-    
-    if [[ $? -eq 0 ]]; then
+    if run_pg_command "${PG_CMD[@]}"; then
         echo "✅ Database reset successfully for $project_name"
     else
         error_exit "❌ Failed to reset database for $project_name"
-    fi
-    
-    # Clean up password from environment if we set it
-    if [[ "$use_pgpass" == false && -n "$password" ]]; then
-        unset PGPASSWORD
     fi
 }
 
@@ -475,6 +619,7 @@ reset_database() {
 backup_database() {
     local project_name="$1"
     local file_path=""
+    local tmp_out=""
     local overwrite=false
     
     shift # Drop project name
@@ -517,34 +662,29 @@ backup_database() {
     echo "💾 Backing up database '$database' for project '$project_name'..."
     
     # Check for .pgpass first (most secure)
-    local use_pgpass=false
     if check_pgpass; then
-        use_pgpass=true
+        password=""
         echo "🔐 Using .pgpass for authentication"
     elif [[ -n "$password" ]]; then
-        export PGPASSWORD="$password"
         echo "🔑 Using password from configuration"
     else
         echo "🔍 No password found - will prompt for authentication"
     fi
     
     # Build and execute the command
-    local pg_dump_cmd
-    pg_dump_cmd=$(build_psql_command "pg_dump" "--clean")
+    build_pg_command "pg_dump" "--clean"
     
-    [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 Executing: $pg_dump_cmd > $file_path"
+    [[ "$DEBUG_MODE" == true ]] && { echo >&2 "🧪 Executing backup command to $file_path:"; debug_command "${PG_CMD[@]}"; }
     
-    eval "$pg_dump_cmd" >"$file_path"
-    
-    if [[ $? -eq 0 ]]; then
+    tmp_out="$(mktemp)"
+    trap 'rm -f "$tmp_out"' ERR RETURN
+
+    if run_pg_command "${PG_CMD[@]}" >"$tmp_out"; then
+        mv "$tmp_out" "$file_path"
+        trap - ERR RETURN
         echo "✅ Database backed up successfully to $file_path"
     else
         error_exit "❌ Failed to backup database for $project_name"
-    fi
-    
-    # Clean up password from environment if we set it
-    if [[ "$use_pgpass" == false && -n "$password" ]]; then
-        unset PGPASSWORD
     fi
 }
 
@@ -562,29 +702,21 @@ start_database() {
     echo "🚀 Starting psql shell for database '$database' (project '$project_name')..."
     
     # Check for .pgpass first (most secure)
-    local use_pgpass=false
     if check_pgpass; then
-        use_pgpass=true
+        password=""
         echo "🔐 Using .pgpass for authentication"
     elif [[ -n "$password" ]]; then
-        export PGPASSWORD="$password"
         echo "🔑 Using password from configuration"
     else
         echo "🔍 No password found - will prompt for authentication"
     fi
     
     # Build and execute the command
-    local psql_cmd
-    psql_cmd=$(build_psql_command "psql" "")
+    build_pg_command "psql"
     
-    [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 Executing: $psql_cmd"
+    [[ "$DEBUG_MODE" == true ]] && { echo >&2 "🧪 Executing:"; debug_command "${PG_CMD[@]}"; }
     
-    eval "$psql_cmd"
-    
-    # Clean up password from environment if we set it
-    if [[ "$use_pgpass" == false && -n "$password" ]]; then
-        unset PGPASSWORD
-    fi
+    run_pg_command "${PG_CMD[@]}"
 }
 
 # List projects available in config file
@@ -595,7 +727,7 @@ list_projects() {
         echo 
         echo "📚 Projects from $PROJECT_CONFIG_FILE:"
         for key in "${!PROJECT_CONFIGS[@]}"; do
-            echo " - $key -> ${PROJECT_CONFIGS[$key]}"
+            echo " - $key -> $(mask_config "${PROJECT_CONFIGS[$key]}")"
         done
     fi
     
@@ -607,7 +739,7 @@ list_projects() {
 
 # Check database connection
 check_database() {
-    local project_name="$1"
+    local project_name="${1:-}"
     local check_all=false
     
     if [[ "$project_name" == "--all" ]]; then
@@ -623,13 +755,13 @@ check_database() {
         local failed=0
         
         for project in "${!PROJECT_CONFIGS[@]}"; do
-            ((total++))
+            total=$((total + 1))
             echo "📋 Checking project: $project"
             
             if check_single_database "$project"; then
-                ((success++))
+                success=$((success + 1))
             else
-                ((failed++))
+                failed=$((failed + 1))
             fi
             echo
         done
@@ -665,26 +797,23 @@ check_single_database() {
     }
     
     # Check for .pgpass first (most secure)
-    local use_pgpass=false
     if check_pgpass; then
-        use_pgpass=true
+        password=""
         [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 Using .pgpass for authentication"
     elif [[ -n "$password" ]]; then
-        export PGPASSWORD="$password"
         [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 Using password from configuration"
     else
         [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 No password found - will prompt for authentication"
     fi
     
     # Build connection test command
-    local psql_cmd
-    psql_cmd=$(build_psql_command "psql" "-c 'SELECT version();' -t")
+    build_pg_command "psql" "-c" "SELECT version();" "-t"
     
-    [[ "$DEBUG_MODE" == true ]] && echo >&2 "🧪 Executing connection test: $psql_cmd"
+    [[ "$DEBUG_MODE" == true ]] && { echo >&2 "🧪 Executing connection test:"; debug_command "${PG_CMD[@]}"; }
     
     # Test connection with timeout
     local result
-    if timeout 10 bash -c "$psql_cmd" >/dev/null 2>&1; then
+    if run_pg_command_timeout 10 "${PG_CMD[@]}" >/dev/null 2>&1; then
         echo "   ✅ Connection successful to $database@$host:$port"
         result=0
     else
@@ -692,21 +821,16 @@ check_single_database() {
         result=1
     fi
     
-    # Clean up password from environment if we set it
-    if [[ "$use_pgpass" == false && -n "$password" ]]; then
-        unset PGPASSWORD
-    fi
-    
     return $result
 }
 
 # Get database information
 info_database() {
-    local project_name="$1"
+    local project_name="${1:-}"
     local show_tables=false
     local show_size=false
     
-    shift # Drop project name
+    [[ $# -gt 0 ]] && shift # Drop project name
     
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -744,12 +868,10 @@ info_database() {
     echo
     
     # Check for .pgpass first (most secure)
-    local use_pgpass=false
     if check_pgpass; then
-        use_pgpass=true
+        password=""
         echo "🔐 Using .pgpass for authentication"
     elif [[ -n "$password" ]]; then
-        export PGPASSWORD="$password"
         echo "🔑 Using password from configuration"
     else
         echo "🔍 No password found - will prompt for authentication"
@@ -759,10 +881,11 @@ info_database() {
     echo "📋 Basic Information:"
     
     # PostgreSQL version
-    local version_cmd
-    version_cmd=$(build_psql_command "psql" "-c 'SELECT version();' -t")
     local version
-    version=$(eval "$version_cmd" 2>/dev/null | head -1 | xargs)
+    build_pg_command "psql" "-c" "SELECT version();" "-t"
+    if ! version=$(run_pg_command "${PG_CMD[@]}" 2>/dev/null | head -1 | xargs); then
+        version=""
+    fi
     if [[ -n "$version" ]]; then
         echo "   📦 Version: $version"
     else
@@ -771,28 +894,31 @@ info_database() {
     fi
     
     # Database size
-    local size_cmd
-    size_cmd=$(build_psql_command "psql" "-c \"SELECT pg_size_pretty(pg_database_size('$database'));\" -t")
     local db_size
-    db_size=$(eval "$size_cmd" 2>/dev/null | head -1 | xargs)
+    build_pg_command "psql" "-c" "SELECT pg_size_pretty(pg_database_size(current_database()));" "-t"
+    if ! db_size=$(run_pg_command "${PG_CMD[@]}" 2>/dev/null | head -1 | xargs); then
+        db_size=""
+    fi
     if [[ -n "$db_size" ]]; then
         echo "   💾 Database Size: $db_size"
     fi
     
     # Connection count
-    local conn_cmd
-    conn_cmd=$(build_psql_command "psql" "-c 'SELECT count(*) FROM pg_stat_activity;' -t")
     local connections
-    connections=$(eval "$conn_cmd" 2>/dev/null | head -1 | xargs)
+    build_pg_command "psql" "-c" "SELECT count(*) FROM pg_stat_activity;" "-t"
+    if ! connections=$(run_pg_command "${PG_CMD[@]}" 2>/dev/null | head -1 | xargs); then
+        connections=""
+    fi
     if [[ -n "$connections" ]]; then
         echo "   🔗 Active Connections: $connections"
     fi
     
     # Table count
-    local table_cmd
-    table_cmd=$(build_psql_command "psql" "-c \"SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';\" -t")
     local table_count
-    table_count=$(eval "$table_cmd" 2>/dev/null | head -1 | xargs)
+    build_pg_command "psql" "-c" "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';" "-t"
+    if ! table_count=$(run_pg_command "${PG_CMD[@]}" 2>/dev/null | head -1 | xargs); then
+        table_count=""
+    fi
     if [[ -n "$table_count" ]]; then
         echo "   📋 Tables: $table_count"
     fi
@@ -801,23 +927,16 @@ info_database() {
     if [[ "$show_tables" == true ]]; then
         echo
         echo "📋 Tables in database '$database':"
-        local tables_cmd
-        tables_cmd=$(build_psql_command "psql" "-c \"SELECT schemaname, tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;\"")
-        eval "$tables_cmd" 2>/dev/null || echo "   ❌ Could not retrieve table list"
+        build_pg_command "psql" "-c" "SELECT schemaname, tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;"
+        run_pg_command "${PG_CMD[@]}" 2>/dev/null || echo "   ❌ Could not retrieve table list"
     fi
     
     # Show size details if requested
     if [[ "$show_size" == true ]]; then
         echo
         echo "💾 Size Details:"
-        local size_details_cmd
-        size_details_cmd=$(build_psql_command "psql" "-c \"SELECT schemaname, tablename, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size FROM pg_tables WHERE schemaname = 'public' ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC LIMIT 10;\"")
-        eval "$size_details_cmd" 2>/dev/null || echo "   ❌ Could not retrieve size details"
-    fi
-    
-    # Clean up password from environment if we set it
-    if [[ "$use_pgpass" == false && -n "$password" ]]; then
-        unset PGPASSWORD
+        build_pg_command "psql" "-c" "SELECT schemaname, tablename, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size FROM pg_tables WHERE schemaname = 'public' ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC LIMIT 10;"
+        run_pg_command "${PG_CMD[@]}" 2>/dev/null || echo "   ❌ Could not retrieve size details"
     fi
 }
 
@@ -829,7 +948,7 @@ init_config() {
         echo "⚠️  Config file already exists: $PROJECT_CONFIG_FILE"
         echo "   Use 'dbm config add <project> <config>' to add new projects"
         echo "   Or remove the existing file first if you want to start fresh"
-        return 1
+        return 0
     fi
     
     if [[ ! -f "$template_file" ]]; then
@@ -871,20 +990,23 @@ init_config() {
 }
 
 config_add() {
-    local project_name="$1"
-    local config_string="$2"
+    local project_name="${1:-}"
+    local config_string="${2:-}"
     
     [[ -z "$project_name" ]] && error_exit "❌ 'config add' requires <project_name> <config_string>"
     [[ -z "$config_string" ]] && error_exit "❌ 'config add' requires <project_name> <config_string>"
+    validate_project_name "$project_name"
     
     # Validate config string format
-    if ! [[ "$config_string" =~ ^[^:]+:[^:]*:[0-9]+:[^:]+(:.*)*$ ]] && ! [[ "$config_string" =~ ^postgres(ql)?:// ]]; then
+    if ! validate_config_string "$config_string"; then
         error_exit "❌ Invalid config format. Expected: user:password:port:db[:host[:ssl[:cert]]] or postgres://..."
     fi
     
     # Check if project already exists
-    if [[ -n "${PROJECT_CONFIGS[$project_name]}" ]]; then
-        echo "⚠️  Project '$project_name' already exists with config: ${PROJECT_CONFIGS[$project_name]}"
+    if project_config_exists "$project_name"; then
+        local existing_config
+        existing_config="$(read_project_config_value "$project_name")"
+        echo "⚠️  Project '$project_name' already exists with config: $(mask_config "$existing_config")"
         read -p "Do you want to overwrite it? (y/N): " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -901,8 +1023,8 @@ config_add() {
     fi
     
     # Remove existing entry if it exists
-    if grep -q "^$project_name=" "$PROJECT_CONFIG_FILE" 2>/dev/null; then
-        sed -i "/^$project_name=/d" "$PROJECT_CONFIG_FILE"
+    if project_config_exists "$project_name"; then
+        remove_project_config_entry "$project_name"
     fi
     
     # Add new entry with proper newline
@@ -910,27 +1032,28 @@ config_add() {
     echo "$project_name=$config_string" >> "$PROJECT_CONFIG_FILE"
     
     echo "✅ Added project '$project_name' to configuration"
-    echo "   Config: $config_string"
+    echo "   Config: $(mask_config "$config_string")"
 }
 
 config_remove() {
-    local project_name="$1"
+    local project_name="${1:-}"
     
     [[ -z "$project_name" ]] && error_exit "❌ 'config remove' requires <project_name>"
+    validate_project_name "$project_name"
     
     if [[ ! -f "$PROJECT_CONFIG_FILE" ]]; then
         error_exit "❌ Config file not found: $PROJECT_CONFIG_FILE"
     fi
     
     # Check if project exists
-    if ! grep -q "^$project_name=" "$PROJECT_CONFIG_FILE" 2>/dev/null; then
+    if ! project_config_exists "$project_name"; then
         error_exit "❌ Project '$project_name' not found in configuration"
     fi
     
     # Show current config
     local current_config
-    current_config=$(grep "^$project_name=" "$PROJECT_CONFIG_FILE" | cut -d'=' -f2-)
-    echo "⚠️  About to remove project '$project_name' with config: $current_config"
+    current_config="$(read_project_config_value "$project_name")"
+    echo "⚠️  About to remove project '$project_name' with config: $(mask_config "$current_config")"
     read -p "Are you sure? (y/N): " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -939,29 +1062,30 @@ config_remove() {
     fi
     
     # Remove the entry
-    sed -i "/^$project_name=/d" "$PROJECT_CONFIG_FILE"
+    remove_project_config_entry "$project_name"
     
     echo "✅ Removed project '$project_name' from configuration"
 }
 
 config_edit() {
-    local project_name="$1"
+    local project_name="${1:-}"
     
     [[ -z "$project_name" ]] && error_exit "❌ 'config edit' requires <project_name>"
+    validate_project_name "$project_name"
     
     if [[ ! -f "$PROJECT_CONFIG_FILE" ]]; then
         error_exit "❌ Config file not found: $PROJECT_CONFIG_FILE"
     fi
     
     # Check if project exists
-    if ! grep -q "^$project_name=" "$PROJECT_CONFIG_FILE" 2>/dev/null; then
+    if ! project_config_exists "$project_name"; then
         error_exit "❌ Project '$project_name' not found in configuration"
     fi
     
     # Show current config
     local current_config
-    current_config=$(grep "^$project_name=" "$PROJECT_CONFIG_FILE" | cut -d'=' -f2-)
-    echo "📋 Current config for '$project_name': $current_config"
+    current_config="$(read_project_config_value "$project_name")"
+    echo "📋 Current config for '$project_name': $(mask_config "$current_config")"
     echo
     echo "📝 Enter new configuration (or press Enter to cancel):"
     echo "   Formats: user:password:port:db[:host[:ssl[:cert]]]"
@@ -975,20 +1099,21 @@ config_edit() {
     fi
     
     # Validate new config
-    if ! [[ "$new_config" =~ ^[^:]+:[^:]*:[0-9]+:[^:]+(:.*)*$ ]] && ! [[ "$new_config" =~ ^postgres(ql)?:// ]]; then
+    if ! validate_config_string "$new_config"; then
         error_exit "❌ Invalid config format"
     fi
     
     # Update the config
-    sed -i "s|^$project_name=.*|$project_name=$new_config|" "$PROJECT_CONFIG_FILE"
+    remove_project_config_entry "$project_name"
+    echo "$project_name=$new_config" >> "$PROJECT_CONFIG_FILE"
     
     echo "✅ Updated project '$project_name' configuration"
-    echo "   New config: $new_config"
+    echo "   New config: $(mask_config "$new_config")"
 }
 
 # Configuration management dispatcher
 config_management() {
-    local action="$1"
+    local action="${1:-}"
     shift
     
     case "$action" in
@@ -1007,16 +1132,16 @@ config_management() {
     esac
 }
 
-# Main dispatcher function
+# Main dispatcher function. Named dbm intentionally so sourcing the script exposes the same command name.
 dbm() {
-    load_project_configs
-    
-    [[ "$1" == "-h" || "$1" == "--help" ]] && show_help
-    
     if [[ $# -lt 1 ]]; then
         show_help
         error_exit "❌ No action provided"
     fi
+
+    [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && show_help
+
+    load_project_configs
     
     local action="$1"
     shift
