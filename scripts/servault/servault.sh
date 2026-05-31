@@ -17,23 +17,20 @@ NC='\033[0m' # No Color
 
 # Script version
 readonly SCRIPT_VERSION="2.1.0"
+readonly SCRIPT_NAME="$(basename -- "$0")"
 
 # Configuration file path
 readonly CONFIG_DIR="$HOME/.servault"
 readonly CONFIG_FILE="$CONFIG_DIR/config"
 
-# Configuration - Multi-user support with vault mapping
-# Format: environment -> vault_name OR environment:user -> vault_name
-declare -A OP_ITEM_PATTERNS=(
-    ["uat"]="ch UAT server"
-    ["prod"]="ch prod server"
-    ["uat:alex"]="ch UAT server"
-    ["staging"]="staging server"
-    ["dev"]="dev server"
-)
+# Configuration - Multi-user support with vault mapping.
+# Loaded from CONFIG_FILE as ITEM.<environment>=<vault_name> or ITEM.<environment>:<user>=<vault_name>.
+declare -A OP_ITEM_PATTERNS=()
 
 # Global configuration storage for setup
 declare -A CONFIGURED_ENVIRONMENTS=()
+CONFIG_CHANGED=false
+CLEAR_SCREEN=false
 
 #######################################
 # Print colored output
@@ -45,10 +42,45 @@ print_color() {
 }
 
 #######################################
+# Print colored output to stderr
+#######################################
+print_color_error() {
+    local color="$1"
+    local message="$2"
+    echo -e "${color}${message}${NC}" >&2
+}
+
+#######################################
+# Shell-quote a value for remote command construction
+#######################################
+shell_quote() {
+    local value="$1"
+
+    value="${value//\'/\'\\\'\'}"
+    printf "'%s'" "$value"
+}
+
+#######################################
+# Escape a value for double-quoted Tcl strings
+#######################################
+expect_double_quote_escape() {
+    local value="$1"
+
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//\$/\\\$}"
+    value="${value//[/\\[}"
+    value="${value//]/\\]}"
+    echo "$value"
+}
+
+#######################################
 # Print script banner
 #######################################
 show_banner() {
-    clear
+    if [ "${CLEAR_SCREEN:-false}" = true ] && command_exists clear && [ -t 1 ] && [ -n "${TERM:-}" ] && [ "$TERM" != "dumb" ]; then
+        clear
+    fi
     print_color "$CYAN" "
 ╔═════════════════════════════════════════════════════════════════════════╗
 ║                                                                         ║
@@ -59,12 +91,27 @@ show_banner() {
 ║    ███████║███████╗██║  ██║ ╚████╔╝ ██║  ██║╚██████╔╝███████╗ ██║       ║
 ║    ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝ ╚═════╝ ╚══════╝ ╚═╝       ║
 ║                                                                         ║
-║               🔐 Secure Server Access Manager v${SCRIPT_VERSION} 🔐                   ║
+║               🔐 Secure Server Access Manager v${SCRIPT_VERSION} 🔐                 ║
 ║                                                                         ║
 ╚═════════════════════════════════════════════════════════════════════════╝
 "
     print_color "$YELLOW" "Enhanced server login manager with multi-user 1Password integration"
     print_color "$BLUE" "Connect to servers with user-specific credentials and vault support"
+    echo
+}
+
+#######################################
+# Show the command being executed
+#######################################
+show_invocation() {
+    local arg
+
+    print_color "$CYAN" "Command:"
+    printf '  %s' "$SCRIPT_NAME"
+    for arg in "$@"; do
+        printf ' %q' "$arg"
+    done
+    echo
     echo
 }
 
@@ -88,9 +135,51 @@ ensure_config_dir() {
 # Read configuration file
 #######################################
 read_config() {
+    PASSWORD_MANAGER=""
+    OP_ITEM_PATTERNS=()
+
     if [ -f "$CONFIG_FILE" ]; then
-        # Source the config file to load variables
-        . "$CONFIG_FILE"
+        local line key value item_key
+
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+                ""|\#*)
+                    continue
+                    ;;
+            esac
+
+            if [[ "$line" != *=* ]]; then
+                print_color "$YELLOW" "⚠️  Ignoring invalid config line: $line"
+                continue
+            fi
+
+            key="${line%%=*}"
+            value="${line#*=}"
+
+            case "$key" in
+                PASSWORD_MANAGER)
+                    case "$value" in
+                        1password|bitwarden)
+                            PASSWORD_MANAGER="$value"
+                            ;;
+                        *)
+                            print_color "$YELLOW" "⚠️  Ignoring invalid password manager in config: $value"
+                            ;;
+                    esac
+                    ;;
+                ITEM.*)
+                    item_key="${key#ITEM.}"
+                    if [[ "$item_key" =~ ^[A-Za-z0-9_-]+(:[A-Za-z0-9_-]+)?$ ]]; then
+                        OP_ITEM_PATTERNS["$item_key"]="$value"
+                    else
+                        print_color "$YELLOW" "⚠️  Ignoring invalid item key in config: $item_key"
+                    fi
+                    ;;
+                *)
+                    print_color "$YELLOW" "⚠️  Ignoring unknown config key: $key"
+                    ;;
+            esac
+        done < "$CONFIG_FILE"
     fi
 }
 
@@ -99,6 +188,7 @@ read_config() {
 #######################################
 write_config() {
     local password_manager="$1"
+    local key
     
     ensure_config_dir
     
@@ -107,6 +197,12 @@ write_config() {
 # Generated on $(date)
 PASSWORD_MANAGER=$password_manager
 EOF
+
+    for key in "${!OP_ITEM_PATTERNS[@]}"; do
+        printf 'ITEM.%s=%s\n' "$key" "${OP_ITEM_PATTERNS[$key]}" >> "$CONFIG_FILE"
+    done
+
+    chmod 600 "$CONFIG_FILE"
     
     print_color "$GREEN" "✅ Configuration saved to $CONFIG_FILE"
 }
@@ -125,7 +221,7 @@ detect_available_password_managers() {
         available+=("bitwarden")
     fi
     
-    echo "${available[@]}"
+    printf '%s\n' "${available[@]}"
 }
 
 #######################################
@@ -144,10 +240,10 @@ get_password_manager() {
             "bw"|"bitwarden")
                 echo "bitwarden"
                 return
-                ;;
+            ;;
             *)
-                print_color "$RED" "❌ Invalid password manager: $override"
-                print_color "$YELLOW" "💡 Valid options: 1password, bitwarden, op, bw"
+                print_color_error "$RED" "❌ Invalid password manager: $override"
+                print_color_error "$YELLOW" "💡 Valid options: 1password, bitwarden, op, bw"
                 exit 1
                 ;;
         esac
@@ -162,12 +258,12 @@ get_password_manager() {
     fi
     
     # Auto-detect if no config
-    local available
-    available=($(detect_available_password_managers))
+    local available=()
+    mapfile -t available < <(detect_available_password_managers)
     
     if [ ${#available[@]} -eq 0 ]; then
-        print_color "$RED" "❌ No password manager found"
-        print_color "$YELLOW" "💡 Please install 1Password CLI or Bitwarden CLI"
+        print_color_error "$RED" "❌ No password manager found"
+        print_color_error "$YELLOW" "💡 Please install 1Password CLI or Bitwarden CLI"
         exit 1
     elif [ ${#available[@]} -eq 1 ]; then
         echo "${available[0]}"
@@ -417,14 +513,10 @@ signin_1password() {
         return 0
     fi
     
-    print_color "$BLUE" "🔐 Signing in to 1Password..."
-    if ! eval "$(op signin)" 2>/dev/null; then
-        print_color "$RED" "❌ 1Password sign-in failed."
-        print_color "$YELLOW" "💡 Make sure you have 1Password CLI configured and try again."
-        exit 1
-    fi
-    
-    print_color "$GREEN" "✅ 1Password authentication successful"
+    print_color "$RED" "❌ Not signed in to 1Password."
+    print_color "$YELLOW" "💡 Please sign in with the 1Password CLI first, then run this command again."
+    print_color "$CYAN" "   op signin"
+    exit 1
 }
 
 #######################################
@@ -443,8 +535,7 @@ signin_bitwarden() {
     elif [ "$status" = "locked" ]; then
         print_color "$BLUE" "🔐 Unlocking Bitwarden vault..."
         local session
-        session=$(bw unlock --raw 2>/dev/null)
-        if [ $? -eq 0 ] && [ -n "$session" ]; then
+        if session=$(bw unlock --raw 2>/dev/null) && [ -n "$session" ]; then
             export BW_SESSION="$session"
             print_color "$GREEN" "✅ Bitwarden vault unlocked"
             return 0
@@ -486,28 +577,37 @@ get_op_credentials() {
     local vault_name="$1"
     local field_name="$2"
     
+    if ! op item get "$vault_name" --format json >/dev/null 2>&1; then
+        print_color_error "$RED" "❌ Failed to retrieve item '$vault_name' from 1Password"
+        print_color_error "$YELLOW" "💡 Make sure the item exists and your 1Password session is valid"
+        exit 1
+    fi
+
     # Try to get credential from individual field first, then fall back to notes
     local value
-    value=$(op item get "$vault_name" --field "$field_name" 2>/dev/null)
+    value=$(op item get "$vault_name" --field "$field_name" 2>/dev/null || true)
     
     if [ -z "$value" ]; then
         # Fall back to parsing from notes field
         local credentials
-        credentials=$(op item get "$vault_name" --field notesPlain 2>/dev/null)
+        if ! credentials=$(op item get "$vault_name" --field notesPlain 2>/dev/null); then
+            credentials=""
+        fi
         
         if [ -z "$credentials" ]; then
-            print_color "$RED" "❌ Failed to retrieve credentials from vault '$vault_name'"
-            print_color "$YELLOW" "💡 Make sure the 1Password item '$vault_name' exists and contains the required fields"
+            print_color_error "$RED" "❌ Failed to retrieve credentials from vault '$vault_name'"
+            print_color_error "$YELLOW" "💡 Make sure the 1Password item '$vault_name' exists and contains the required fields"
             exit 1
         fi
         
-        # Parse from notes in key=value format
-        value=$(echo "$credentials" | grep "^${field_name}=" | cut -d'=' -f2-)
+        # Parse from notes in key=value format without letting a missing key
+        # trip set -e/pipefail before we can print the friendly error below.
+        value=$(printf '%s\n' "$credentials" | awk -F= -v key="$field_name" '$1 == key {sub(/^[^=]*=/, ""); print; found=1; exit} END {exit 0}')
     fi
     
     if [ -z "$value" ]; then
-        print_color "$RED" "❌ Credential '$field_name' not found in vault '$vault_name'"
-        print_color "$YELLOW" "💡 Check that '$vault_name' contains field '$field_name'"
+        print_color_error "$RED" "❌ Credential '$field_name' not found in vault '$vault_name'"
+        print_color_error "$YELLOW" "💡 Check that '$vault_name' contains field '$field_name'"
         exit 1
     fi
     
@@ -526,8 +626,8 @@ get_bw_credentials() {
     item_json=$(bw get item "$vault_name" 2>/dev/null)
     
     if [ -z "$item_json" ]; then
-        print_color "$RED" "❌ Failed to retrieve item '$vault_name' from Bitwarden"
-        print_color "$YELLOW" "💡 Make sure the Bitwarden item '$vault_name' exists"
+        print_color_error "$RED" "❌ Failed to retrieve item '$vault_name' from Bitwarden"
+        print_color_error "$YELLOW" "💡 Make sure the Bitwarden item '$vault_name' exists"
         exit 1
     fi
     
@@ -541,13 +641,13 @@ get_bw_credentials() {
         notes=$(echo "$item_json" | jq -r '.notes // ""' 2>/dev/null)
         
         if [ -n "$notes" ]; then
-            value=$(echo "$notes" | grep "^${field_name}=" | cut -d'=' -f2-)
+            value=$(printf '%s\n' "$notes" | awk -F= -v key="$field_name" '$1 == key {sub(/^[^=]*=/, ""); print; found=1; exit} END {exit 0}')
         fi
     fi
     
     if [ -z "$value" ] || [ "$value" = "null" ]; then
-        print_color "$RED" "❌ Credential '$field_name' not found in Bitwarden item '$vault_name'"
-        print_color "$YELLOW" "💡 Check that '$vault_name' contains field '$field_name' in custom fields or notes"
+        print_color_error "$RED" "❌ Credential '$field_name' not found in Bitwarden item '$vault_name'"
+        print_color_error "$YELLOW" "💡 Check that '$vault_name' contains field '$field_name' in custom fields or notes"
         exit 1
     fi
     
@@ -570,44 +670,325 @@ get_credentials() {
             get_bw_credentials "$vault_name" "$field_name"
             ;;
         *)
-            print_color "$RED" "❌ Unknown password manager: $pm"
+            print_color_error "$RED" "❌ Unknown password manager: $pm"
             exit 1
             ;;
     esac
 }
 
 #######################################
+# Optional credential retrieval
+#######################################
+get_optional_credentials() {
+    local vault_name="$1"
+    local field_name="$2"
+    local pm="$3"
+    local value=""
+    local item_json notes
+
+    case "$pm" in
+        "1password")
+            if value=$(op item get "$vault_name" --field "$field_name" 2>/dev/null) && [ -n "$value" ]; then
+                echo "$value"
+                return 0
+            fi
+            if notes=$(op item get "$vault_name" --field notesPlain 2>/dev/null); then
+                value=$(printf '%s\n' "$notes" | awk -F= -v key="$field_name" '$1 == key {sub(/^[^=]*=/, ""); print; exit}')
+                [ -n "$value" ] && echo "$value"
+            fi
+            return 0
+            ;;
+        "bitwarden")
+            if item_json=$(bw get item "$vault_name" 2>/dev/null); then
+                value=$(printf '%s\n' "$item_json" | jq -r --arg field "$field_name" '.fields[]? | select(.name==$field) | .value' 2>/dev/null)
+                if [ -n "$value" ] && [ "$value" != "null" ]; then
+                    echo "$value"
+                    return 0
+                fi
+                notes=$(printf '%s\n' "$item_json" | jq -r '.notes // ""' 2>/dev/null)
+                value=$(printf '%s\n' "$notes" | awk -F= -v key="$field_name" '$1 == key {sub(/^[^=]*=/, ""); print; exit}')
+                [ -n "$value" ] && echo "$value"
+            fi
+            return 0
+            ;;
+    esac
+
+    return 0
+}
+
+#######################################
+# Get credentials from one cached 1Password JSON payload
+#######################################
+get_op_json_value() {
+    local item_json="$1"
+    local field_name="$2"
+    local value
+
+    value=$(printf '%s\n' "$item_json" | jq -r --arg field "$field_name" '
+        def norm:
+            tostring
+            | ascii_downcase
+            | gsub("[^a-z0-9]"; "");
+
+        ($field | norm) as $wanted
+        | first(
+            .fields[]?
+            | select(
+                (.label? | norm) == $wanted
+                or (.id? | norm) == $wanted
+                or (.name? | norm) == $wanted
+            )
+            | .value
+        ) // ""
+    ' 2>/dev/null)
+    if [ -n "$value" ] && [ "$value" != "null" ]; then
+        echo "$value"
+        return 0
+    fi
+
+    printf '%s\n' "$item_json" | jq -r '
+        def norm:
+            tostring
+            | ascii_downcase
+            | gsub("[^a-z0-9]"; "");
+
+        [
+            .notesPlain?,
+            (
+                .fields[]?
+                | select(
+                    (.id? | norm) == "notesplain"
+                    or (.label? | norm) == "notesplain"
+                    or (.purpose? | norm) == "notes"
+                    or (.type? | norm) == "concealednotes"
+                    or (.type? | norm) == "stringnotes"
+                )
+                | .value?
+            )
+        ]
+        | map(select(. != null and . != ""))
+        | first // ""
+    ' 2>/dev/null |
+        awk -F= -v key="$field_name" '
+            function norm(value) {
+                value = tolower(value)
+                gsub(/[^a-z0-9]/, "", value)
+                return value
+            }
+            norm($1) == norm(key) {
+                sub(/^[^=]*=/, "")
+                print
+                exit
+            }
+            END {exit 0}
+        '
+}
+
+show_op_json_available_keys() {
+    local item_json="$1"
+    local keys
+
+    keys=$(printf '%s\n' "$item_json" | jq -r '
+        def norm:
+            tostring
+            | ascii_downcase
+            | gsub("[^a-z0-9]"; "");
+
+        (
+            .fields[]?
+            | select((.label? // .id? // .name? // "") != "")
+            | (.label? // .id? // .name?)
+        ),
+        (
+            [
+                .notesPlain?,
+                (
+                    .fields[]?
+                    | select(
+                        (.id? | norm) == "notesplain"
+                        or (.label? | norm) == "notesplain"
+                        or (.purpose? | norm) == "notes"
+                        or (.type? | norm) == "concealednotes"
+                        or (.type? | norm) == "stringnotes"
+                    )
+                    | .value?
+                )
+            ]
+            | map(select(. != null and . != ""))
+            | first // ""
+            | split("\n")[]
+            | select(test("="))
+            | split("=")[0]
+        )
+    ' 2>/dev/null | awk 'NF && !seen[$0]++' | paste -sd ', ' -)
+
+    if [ -n "$keys" ]; then
+        print_color_error "$BLUE" "   Keys visible in item: $keys"
+    fi
+}
+
+load_required_op_json_credential() {
+    local -n target_ref="$1"
+    local item_json="$2"
+    local vault_name="$3"
+    local field_name="$4"
+    local fast_mode="$5"
+    local value
+
+    if [ "$fast_mode" = false ]; then
+        print_color "$CYAN" "   • Loading $field_name..."
+    fi
+
+    value=$(get_op_json_value "$item_json" "$field_name")
+    if [ -z "$value" ]; then
+        print_color_error "$RED" "❌ Credential '$field_name' not found in vault '$vault_name'"
+        print_color_error "$YELLOW" "💡 Check that '$vault_name' contains field '$field_name'"
+        show_op_json_available_keys "$item_json"
+        exit 1
+    fi
+
+    target_ref="$value"
+
+    if [ "$fast_mode" = false ]; then
+        print_color "$GREEN" "     Loaded $field_name"
+    fi
+}
+
+load_optional_op_json_credential() {
+    local -n target_ref="$1"
+    local item_json="$2"
+    local field_name="$3"
+    local fast_mode="$4"
+    local value
+
+    if [ "$fast_mode" = false ]; then
+        print_color "$CYAN" "   • Checking optional $field_name..."
+    fi
+
+    value=$(get_op_json_value "$item_json" "$field_name")
+    target_ref="$value"
+
+    if [ "$fast_mode" = false ]; then
+        if [ -n "$value" ]; then
+            print_color "$GREEN" "     Loaded optional $field_name"
+        else
+            print_color "$YELLOW" "     Optional $field_name not set"
+        fi
+    fi
+}
+
+#######################################
 # Fast credential loading (universal approach)
 #######################################
+load_required_credential() {
+    local -n target_ref="$1"
+    local vault_name="$2"
+    local field_name="$3"
+    local pm="$4"
+    local fast_mode="$5"
+    local value
+
+    if [ "$fast_mode" = false ]; then
+        print_color "$CYAN" "   • Loading $field_name..."
+    fi
+
+    value=$(get_credentials "$vault_name" "$field_name" "$pm")
+    target_ref="$value"
+
+    if [ "$fast_mode" = false ]; then
+        print_color "$GREEN" "     Loaded $field_name"
+    fi
+}
+
+load_optional_credential() {
+    local -n target_ref="$1"
+    local vault_name="$2"
+    local field_name="$3"
+    local pm="$4"
+    local fast_mode="$5"
+    local value
+
+    if [ "$fast_mode" = false ]; then
+        print_color "$CYAN" "   • Checking optional $field_name..."
+    fi
+
+    value=$(get_optional_credentials "$vault_name" "$field_name" "$pm")
+    target_ref="$value"
+
+    if [ "$fast_mode" = false ]; then
+        if [ -n "$value" ]; then
+            print_color "$GREEN" "     Loaded optional $field_name"
+        else
+            print_color "$YELLOW" "     Optional $field_name not set"
+        fi
+    fi
+}
+
 load_credentials() {
     local vault_name="$1"
     local pm="$2"
+    local fast_mode="${3:-false}"
+    local op_item_json=""
     
     if [ "${fast_mode:-false}" = false ]; then
         print_color "$BLUE" "📋 Loading credentials from '$vault_name' using $pm..."
     fi
+
+    if [ "$pm" = "1password" ] && command_exists jq; then
+        if [ "$fast_mode" = false ]; then
+            print_color "$CYAN" "   • Fetching 1Password item once..."
+        fi
+
+        if ! op_item_json=$(op item get "$vault_name" --format json 2>/dev/null); then
+            print_color_error "$RED" "❌ Failed to retrieve item '$vault_name' from 1Password"
+            print_color_error "$YELLOW" "💡 Make sure the item exists and your 1Password session is valid"
+            exit 1
+        fi
+
+        if [ "$fast_mode" = false ]; then
+            print_color "$GREEN" "     Fetched 1Password item"
+        fi
+
+        load_required_op_json_credential SERVER_USER "$op_item_json" "$vault_name" "SERVER_USER" "$fast_mode"
+        load_required_op_json_credential HOST "$op_item_json" "$vault_name" "SERVER_IP" "$fast_mode"
+        load_required_op_json_credential SERVER_PASSWORD "$op_item_json" "$vault_name" "SERVER_PASSWORD" "$fast_mode"
+        load_required_op_json_credential DB_USER "$op_item_json" "$vault_name" "DB_USER" "$fast_mode"
+        load_required_op_json_credential DB_NAME "$op_item_json" "$vault_name" "DB_NAME" "$fast_mode"
+        load_required_op_json_credential DB_PASSWORD "$op_item_json" "$vault_name" "DB_PASSWORD" "$fast_mode"
+        load_required_op_json_credential DB_PORT "$op_item_json" "$vault_name" "DB_PORT" "$fast_mode"
+        load_required_op_json_credential DB_HOST "$op_item_json" "$vault_name" "DB_HOST" "$fast_mode"
+        load_required_op_json_credential MAIN_USER "$op_item_json" "$vault_name" "MAIN_USER" "$fast_mode"
+        load_required_op_json_credential MAIN_PASSWORD "$op_item_json" "$vault_name" "MAIN_PASSWORD" "$fast_mode"
+        load_optional_op_json_credential DB_SYSTEM_USER "$op_item_json" "DB_SYSTEM_USER" "$fast_mode"
+
+        if [ "${fast_mode:-false}" = false ]; then
+            print_color "$GREEN" "✅ Credentials loaded successfully"
+        fi
+
+        return 0
+    fi
     
     # Load server credentials
-    USER=$(get_credentials "$vault_name" "SERVER_USER" "$pm")
-    HOST=$(get_credentials "$vault_name" "SERVER_IP" "$pm")
-    SERVER_PASSWORD=$(get_credentials "$vault_name" "SERVER_PASSWORD" "$pm")
+    load_required_credential SERVER_USER "$vault_name" "SERVER_USER" "$pm" "$fast_mode"
+    load_required_credential HOST "$vault_name" "SERVER_IP" "$pm" "$fast_mode"
+    load_required_credential SERVER_PASSWORD "$vault_name" "SERVER_PASSWORD" "$pm" "$fast_mode"
     
     # Load database credentials
-    DB_USER=$(get_credentials "$vault_name" "DB_USER" "$pm")
-    DB_NAME=$(get_credentials "$vault_name" "DB_NAME" "$pm")
-    DB_PASSWORD=$(get_credentials "$vault_name" "DB_PASSWORD" "$pm")
-    DB_PORT=$(get_credentials "$vault_name" "DB_PORT" "$pm")
-    DB_HOST=$(get_credentials "$vault_name" "DB_HOST" "$pm")
+    load_required_credential DB_USER "$vault_name" "DB_USER" "$pm" "$fast_mode"
+    load_required_credential DB_NAME "$vault_name" "DB_NAME" "$pm" "$fast_mode"
+    load_required_credential DB_PASSWORD "$vault_name" "DB_PASSWORD" "$pm" "$fast_mode"
+    load_required_credential DB_PORT "$vault_name" "DB_PORT" "$pm" "$fast_mode"
+    load_required_credential DB_HOST "$vault_name" "DB_HOST" "$pm" "$fast_mode"
     
     # Load main user credentials
-    MAIN_USER=$(get_credentials "$vault_name" "MAIN_USER" "$pm")
-    MAIN_PASSWORD=$(get_credentials "$vault_name" "MAIN_PASSWORD" "$pm")
+    load_required_credential MAIN_USER "$vault_name" "MAIN_USER" "$pm" "$fast_mode"
+    load_required_credential MAIN_PASSWORD "$vault_name" "MAIN_PASSWORD" "$pm" "$fast_mode"
     
-    # Set database system user (hardcoded for backward compatibility)
-    DB_SYSTEM_USER="cardhouzz"
+    # Optional database system user for sudo su - <user> before psql.
+    load_optional_credential DB_SYSTEM_USER "$vault_name" "DB_SYSTEM_USER" "$pm" "$fast_mode"
     
     # Validate that we got the essential credentials
-    if [ -z "$USER" ] || [ -z "$HOST" ] || [ -z "$SERVER_PASSWORD" ]; then
+    if [ -z "$SERVER_USER" ] || [ -z "$HOST" ] || [ -z "$SERVER_PASSWORD" ]; then
         print_color "$RED" "❌ Missing essential server credentials in vault '$vault_name'"
         print_color "$YELLOW" "💡 Required fields: SERVER_USER, SERVER_IP, SERVER_PASSWORD"
         exit 1
@@ -641,7 +1022,7 @@ show_connection_details() {
         print_color "$YELLOW" "   👤 Server User: $MAIN_USER"
     else
         print_color "$YELLOW" "   🔑 Using standard server credentials"
-        print_color "$YELLOW" "   👤 Server User: $USER"
+        print_color "$YELLOW" "   👤 Server User: $SERVER_USER"
     fi
     
     print_color "$YELLOW" "   🖥️  Host: $HOST"
@@ -673,8 +1054,14 @@ connect_server() {
     local use_main="$4"
     local connect_db="$5"
     
-    local connection_user="$USER"
+    local connection_user="$SERVER_USER"
     local connection_password="$SERVER_PASSWORD"
+    local ssh_target="$connection_user@$HOST"
+    local remote_psql_cmd
+    local remote_sudo_cmd
+    local escaped_connection_password
+    local escaped_connection_user
+    local escaped_db_system_user
     
     if [ "$use_main" = true ]; then
         connection_user="$MAIN_USER"
@@ -692,28 +1079,31 @@ connect_server() {
                 exit 1
             fi
             
-            # Connect to server, switch to database system user, and execute psql commands
-            sshpass -p "$connection_password" ssh -o StrictHostKeyChecking=no "$connection_user@$HOST" -t \
-            "expect -c '
-                spawn sudo su - $DB_SYSTEM_USER
-                expect \"password for $connection_user:\"
-                send \"${connection_password}\r\"
-                expect \"$DB_SYSTEM_USER@\"
-                send \"PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME\r\"
+            remote_psql_cmd="PGPASSWORD=$(shell_quote "$DB_PASSWORD") psql -h $(shell_quote "$DB_HOST") -p $(shell_quote "$DB_PORT") -U $(shell_quote "$DB_USER") -d $(shell_quote "$DB_NAME")"
+            escaped_connection_password=$(expect_double_quote_escape "$connection_password")
+            escaped_connection_user=$(expect_double_quote_escape "$connection_user")
+            escaped_db_system_user=$(expect_double_quote_escape "$DB_SYSTEM_USER")
+            remote_sudo_cmd="expect -c $(shell_quote "
+                spawn sudo su - \"${escaped_db_system_user}\"
+                expect \"password for ${escaped_connection_user}:\"
+                send \"${escaped_connection_password}\r\"
+                expect \"${escaped_db_system_user}@\"
+                send \"${remote_psql_cmd}\r\"
                 interact
-            '"
+            ")"
+            SSHPASS="$connection_password" sshpass -e ssh -o StrictHostKeyChecking=accept-new "$ssh_target" -t "$remote_sudo_cmd"
         else
             # Direct database connection without user switching
-            sshpass -p "$connection_password" ssh -o StrictHostKeyChecking=no "$connection_user@$HOST" -t \
-            "PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME"
+            remote_psql_cmd="PGPASSWORD=$(shell_quote "$DB_PASSWORD") psql -h $(shell_quote "$DB_HOST") -p $(shell_quote "$DB_PORT") -U $(shell_quote "$DB_USER") -d $(shell_quote "$DB_NAME")"
+            SSHPASS="$connection_password" sshpass -e ssh -o StrictHostKeyChecking=accept-new "$ssh_target" -t "$remote_psql_cmd"
         fi
         
     elif [ "$connect_db" = true ]; then
         print_color "$GREEN" "🔗 Connecting to $env server and accessing PostgreSQL database..."
         
         # Connect to server and execute psql commands
-        sshpass -p "$connection_password" ssh -o StrictHostKeyChecking=no "$connection_user@$HOST" -t \
-        "PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME"
+        remote_psql_cmd="PGPASSWORD=$(shell_quote "$DB_PASSWORD") psql -h $(shell_quote "$DB_HOST") -p $(shell_quote "$DB_PORT") -U $(shell_quote "$DB_USER") -d $(shell_quote "$DB_NAME")"
+        SSHPASS="$connection_password" sshpass -e ssh -o StrictHostKeyChecking=accept-new "$ssh_target" -t "$remote_psql_cmd"
         
     else
         print_color "$GREEN" "🔗 Connecting to $env server..."
@@ -724,7 +1114,7 @@ connect_server() {
         fi
         
         # Simple SSH connection
-        sshpass -p "$connection_password" ssh -tt -o StrictHostKeyChecking=no "$connection_user@$HOST"
+        SSHPASS="$connection_password" sshpass -e ssh -tt -o StrictHostKeyChecking=accept-new "$ssh_target"
     fi
 }
 
@@ -748,7 +1138,9 @@ get_available_users() {
         fi
     done
     
-    echo "${users[@]}"
+    if [ ${#users[@]} -gt 0 ]; then
+        printf '%s\n' "${users[@]}"
+    fi
 }
 
 #######################################
@@ -782,7 +1174,7 @@ show_stage_menu() {
     print_color "$CYAN" "Available stages:"
     for stage in "${available_stages[@]}"; do
         print_color "$YELLOW" "  [$counter] $stage"
-        ((counter++))
+        counter=$((counter + 1))
     done
     echo
 }
@@ -795,13 +1187,15 @@ configure_environment() {
     local user_name=""
     local vault_name=""
     local project_name=""
+    local config_key="$env"
+    local user_label=""
     
     if has_existing_config "$env"; then
-        local existing_users
-        existing_users=$(get_available_users "$env")
+        local existing_users=()
+        mapfile -t existing_users < <(get_available_users "$env")
         
         echo
-        print_color "$YELLOW" "⚠️  You already have $env configurations for: $existing_users"
+        print_color "$YELLOW" "⚠️  You already have $env configurations for: ${existing_users[*]}"
         print_color "$BLUE" "What would you like to do?"
         print_color "$CYAN" "  [1] Override existing configuration"
         print_color "$CYAN" "  [2] Add another user for $env"
@@ -818,6 +1212,8 @@ configure_environment() {
                 echo
                 print_color "$BLUE" "User name for this $env configuration:"
                 read -p "User name: " user_name
+                config_key="$env:$user_name"
+                user_label=" ($user_name)"
                 ;;
             3)
                 print_color "$YELLOW" "⏭️  Skipping $env configuration"
@@ -838,27 +1234,29 @@ configure_environment() {
     read -p "Project name: " project_name
     
     echo
-    print_color "$BLUE" "1Password vault item name for $env$([ -n "$user_name" ] && echo " ($user_name)"):"
-    print_color "$CYAN" "Example: 'ch UAT server', 'mycompany uat env', 'project-uat-server'"
+    print_color "$BLUE" "1Password vault item name for $env$user_label:"
+    print_color "$CYAN" "Example: 'project UAT server', 'mycompany uat env', 'project-uat-server'"
     read -p "Vault item name: " vault_name
     
     # Store the configuration
     if [ -n "$user_name" ]; then
-        OP_ITEM_PATTERNS["$env:$user_name"]="$vault_name"
+        OP_ITEM_PATTERNS["$config_key"]="$vault_name"
         print_color "$GREEN" "✅ Configured: $env ($user_name) → \"$vault_name\""
     else
-        OP_ITEM_PATTERNS["$env"]="$vault_name"
+        OP_ITEM_PATTERNS["$config_key"]="$vault_name"
         print_color "$GREEN" "✅ Configured: $env (default) → \"$vault_name\""
     fi
     
     # Store project name for reference
-    CONFIGURED_ENVIRONMENTS["$env$([ -n "$user_name" ] && echo ":$user_name")"]="$project_name"
+    CONFIGURED_ENVIRONMENTS["$config_key"]="$project_name"
+    CONFIG_CHANGED=true
 }
 
 #######################################
 # Interactive configuration setup
 #######################################
 interactive_config() {
+    read_config
     show_banner
     print_color "$BOLD" "🔧 INTERACTIVE CONFIGURATION SETUP"
     echo
@@ -869,8 +1267,9 @@ interactive_config() {
     print_color "$YELLOW" "🔐 Password Manager Configuration:"
     echo
     
-    local available
-    available=($(detect_available_password_managers))
+    local available=()
+    local selected_pm=""
+    mapfile -t available < <(detect_available_password_managers)
     
     if [ ${#available[@]} -eq 0 ]; then
         print_color "$RED" "❌ No password manager found!"
@@ -882,7 +1281,7 @@ interactive_config() {
         local pm="${available[0]}"
         print_color "$BLUE" "🔍 Found: ${pm^} CLI"
         print_color "$GREEN" "✅ Using ${pm^} for credential storage"
-        write_config "$pm"
+        selected_pm="$pm"
     else
         # Both available - let user choose
         print_color "$BLUE" "🔍 Found multiple password managers:"
@@ -896,10 +1295,10 @@ interactive_config() {
         
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             print_color "$GREEN" "✅ Using Bitwarden for credential storage"
-            write_config "bitwarden"
+            selected_pm="bitwarden"
         else
             print_color "$GREEN" "✅ Using 1Password for credential storage"
-            write_config "1password"
+            selected_pm="1password"
         fi
     fi
     
@@ -917,8 +1316,10 @@ interactive_config() {
         fi
     fi
     
-    # Configuration loop
+    # Configuration loop. Each successful stage is saved immediately so an
+    # interrupted setup still leaves usable config behind.
     while true; do
+        CONFIG_CHANGED=false
         show_stage_menu
         read -p "Select a stage to configure (1-4) or 'q' to quit: " stage_choice
         
@@ -933,6 +1334,11 @@ interactive_config() {
                 continue
                 ;;
         esac
+
+        if [ "$CONFIG_CHANGED" = true ]; then
+            write_config "$selected_pm"
+            print_color "$BLUE" "💾 Saved this stage. You can stop here and still use it."
+        fi
         
         echo
         read -p "Configure another stage? (Y/n): " -n 1 -r
@@ -941,6 +1347,11 @@ interactive_config() {
             break
         fi
     done
+
+    if [ ${#OP_ITEM_PATTERNS[@]} -eq 0 ]; then
+        print_color "$YELLOW" "No environments configured. Run '$SCRIPT_NAME --setup' again when you're ready."
+        exit 0
+    fi
     
     # Show final configuration
     echo
@@ -956,43 +1367,7 @@ interactive_config() {
     done
     
     echo
-    read -p "Save this configuration? (Y/n): " -n 1 -r
-    echo
-    
-    if [[ $REPLY =~ ^[Nn]$ ]]; then
-        print_color "$YELLOW" "👍 Configuration not saved. Run './servault.sh --setup' again to reconfigure."
-        exit 0
-    fi
-    
-    # Update the script file
-    print_color "$BLUE" "💾 Updating script configuration..."
-    
-    # Create backup
-    cp "$0" "$0.backup"
-    
-    # Build the new OP_ITEM_PATTERNS declaration
-    local new_patterns="declare -A OP_ITEM_PATTERNS=("
-    for key in "${!OP_ITEM_PATTERNS[@]}"; do
-        new_patterns+="\n    [\"$key\"]=\"${OP_ITEM_PATTERNS[$key]}\""
-    done
-    new_patterns+="\n)"
-    
-    # Update the script using a more reliable method
-    local temp_file=$(mktemp)
-    awk -v patterns="$new_patterns" '
-        /^declare -A OP_ITEM_PATTERNS=/ {
-            print patterns
-            # Skip until the closing parenthesis
-            while (getline > 0 && !/^\)/) continue
-            next
-        }
-        { print }
-    ' "$0" > "$temp_file"
-    
-    mv "$temp_file" "$0"
-    chmod +x "$0"
-    
-    print_color "$GREEN" "✅ Configuration updated successfully!"
+    print_color "$GREEN" "✅ Configuration is saved at $CONFIG_FILE"
     echo
     print_color "$CYAN" "📋 Next steps:"
     print_color "$YELLOW" "1. Create 1Password items with the names shown above (if they don't exist)"
@@ -1002,8 +1377,8 @@ interactive_config() {
     print_color "$PURPLE" "   • MAIN_USER, MAIN_PASSWORD"
     print_color "$PURPLE" "   • DB_SYSTEM_USER (optional)"
     print_color "$YELLOW" "3. Test your setup:"
-    print_color "$CYAN" "   ./servault.sh uat --dry-run                    # Test default user"
-    print_color "$CYAN" "   ./servault.sh uat --user alex --dry-run        # Test specific user"
+    print_color "$CYAN" "   $SCRIPT_NAME uat --dry-run                    # Test default user"
+    print_color "$CYAN" "   $SCRIPT_NAME uat --user alex --dry-run        # Test specific user"
     echo
     print_color "$GREEN" "🎉 You're all set! Happy server hopping!"
 }
@@ -1012,21 +1387,31 @@ interactive_config() {
 # Show current configuration
 #######################################
 show_config() {
+    read_config
     show_banner
     print_color "$BOLD" "CURRENT CONFIGURATION:"
+    print_color "$BLUE" "Config file: $CONFIG_FILE"
     echo
     
     # Group configurations by environment
     local environments=()
     for key in "${!OP_ITEM_PATTERNS[@]}"; do
-        if [[ "$key" != *":"* ]]; then
-            environments+=("$key")
-        fi
+        environments+=("${key%%:*}")
     done
     
     # Sort environments
-    IFS=$'\n' environments=($(sort <<<"${environments[*]}"))
-    unset IFS
+    if [ ${#environments[@]} -eq 0 ]; then
+        if [ -f "$CONFIG_FILE" ]; then
+            print_color "$YELLOW" "No environments configured in $CONFIG_FILE."
+        else
+            print_color "$YELLOW" "No config file found at $CONFIG_FILE."
+        fi
+        print_color "$BLUE" "Run '$SCRIPT_NAME --setup' to configure vault items."
+        echo
+        return 0
+    fi
+
+    mapfile -t environments < <(printf '%s\n' "${environments[@]}" | sort -u)
     
     for env in "${environments[@]}"; do
         print_color "$CYAN" "${env^} Environment:"
@@ -1048,10 +1433,10 @@ show_config() {
     
     print_color "$CYAN" "Available Users per Environment:"
     for env in "${environments[@]}"; do
-        local users
-        users=$(get_available_users "$env")
-        if [ -n "$users" ]; then
-            print_color "$YELLOW" "  • $env: $users"
+        local users=()
+        mapfile -t users < <(get_available_users "$env")
+        if [ ${#users[@]} -gt 0 ]; then
+            print_color "$YELLOW" "  • $env: ${users[*]}"
         fi
     done
     
@@ -1075,56 +1460,66 @@ show_config() {
 #######################################
 show_help() {
     show_banner
+    local cmd="$SCRIPT_NAME"
+
     print_color "$BOLD" "USAGE:"
-    echo "  $0 <environment> [options]"
+    print_color "$CYAN" "  $cmd <environment> [options]"
     echo
     print_color "$BOLD" "ENVIRONMENTS:"
-    echo "  uat            Connect to UAT server"
-    echo "  prod           Connect to production server"
-    echo "  staging        Connect to staging server"
-    echo "  dev            Connect to development server"
+    print_color "$YELLOW" "  uat        Connect to UAT"
+    print_color "$YELLOW" "  prod       Connect to production"
+    print_color "$YELLOW" "  staging    Connect to staging"
+    print_color "$YELLOW" "  dev        Connect to development"
     echo
-    print_color "$BOLD" "OPTIONS:"
-    echo "  --user <name>  Use specific user credentials (e.g., alex, sarah)"
-    echo "  db             Connect to database after server login"
-    echo "  main           Use main user credentials"
-    echo "  main db        Use main user and connect to database"
-    echo "  -h, --help     Show this help message"
-    echo "  -v, --version  Show version information"
-    echo "  --dry-run      Show connection details without connecting"
-    echo "  --config       Show current configuration and 1Password item names"
-    echo "  --setup        Interactive configuration setup (change project prefix, etc.)"
-    echo "  --list-users   Show available users for an environment"
-    echo "  --fast         Fast mode (skip banner and extra output)"
-    echo "  --password-manager <pm>  Override password manager (1password, bitwarden, op, bw)"
+    print_color "$BOLD" "COMMON OPTIONS:"
+    print_color "$GREEN" "  --user <name>             Use named credentials for an environment"
+    print_color "$GREEN" "  db                        Open psql after connecting"
+    print_color "$GREEN" "  main                      Use main user credentials"
+    print_color "$GREEN" "  --dry-run                 Preview connection details without connecting"
+    print_color "$GREEN" "  --list-users              Show users configured for an environment"
+    print_color "$GREEN" "  --password-manager <pm>   Use 1Password or Bitwarden for this run"
+    echo
+    print_color "$BOLD" "UTILITY OPTIONS:"
+    print_color "$PURPLE" "  --setup                   Interactive configuration setup"
+    print_color "$PURPLE" "  --config                  Show configured environments and vault item names"
+    print_color "$PURPLE" "  --fast                    Skip banner and extra output"
+    print_color "$PURPLE" "  --clear                   Clear the terminal before showing the banner"
+    print_color "$PURPLE" "  -v, --version             Show version information"
+    print_color "$PURPLE" "  -h, --help                Show this help message"
     echo
     print_color "$BOLD" "EXAMPLES:"
-    echo "  $0 uat                           # Connect to UAT server (default user)"
-    echo "  $0 uat --user alex               # Connect to UAT server as alex"
-    echo "  $0 prod --user sarah db          # Connect to prod as sarah + database"
-    echo "  $0 uat --user admin main         # Connect to UAT as admin with main credentials"
-    echo "  $0 uat --dry-run                 # Show UAT connection details"
-    echo "  $0 --setup                       # Interactive setup (first-time configuration)"
-    echo "  $0 uat --list-users              # Show available users for UAT"
-    echo "  $0 uat --password-manager bitwarden  # Use Bitwarden for this connection"
+    print_color "$CYAN" "  $cmd uat"
+    print_color "$BLUE" "      Connect to UAT with the default configured user"
+    print_color "$CYAN" "  $cmd uat --user alex"
+    print_color "$BLUE" "      Connect to UAT with Alex's credentials"
+    print_color "$CYAN" "  $cmd prod --user sarah db"
+    print_color "$BLUE" "      Connect to production as Sarah and open the database"
+    print_color "$CYAN" "  $cmd uat main db"
+    print_color "$BLUE" "      Use main credentials, then switch into database access"
+    print_color "$CYAN" "  $cmd uat --dry-run"
+    print_color "$BLUE" "      Preview the resolved server, vault item, and database settings"
+    print_color "$CYAN" "  $cmd uat --list-users"
+    print_color "$BLUE" "      Show configured users for UAT"
+    print_color "$CYAN" "  $cmd uat --password-manager bitwarden"
+    print_color "$BLUE" "      Use Bitwarden for this connection"
+    print_color "$CYAN" "  $cmd --setup"
+    print_color "$BLUE" "      Configure environments and vault item names"
     echo
     print_color "$BOLD" "REQUIREMENTS:"
-    echo "  • Password Manager CLI: 1Password (op) OR Bitwarden (bw)"
-    echo "  • sshpass installed for password authentication"
-    echo "  • expect installed for interactive sessions (main user db access)"
-    echo "  • jq installed (required for Bitwarden support)"
-    echo "  • Valid password manager items configured via --setup"
-    echo "  • Credentials stored as individual fields OR in notes as key=value pairs"
+    print_color "$YELLOW" "  • Password Manager CLI: 1Password (op) or Bitwarden (bw)"
+    print_color "$YELLOW" "  • sshpass for password-based SSH"
+    print_color "$YELLOW" "  • expect for main-user database switching"
+    print_color "$YELLOW" "  • jq for Bitwarden support"
+    print_color "$YELLOW" "  • Vault items configured with the required credential fields"
     echo
     print_color "$BOLD" "MULTI-USER SUPPORT:"
-    echo "  Configure multiple users per environment using --setup"
-    echo "  Each user can have their own password manager vault item"
-    echo "  Use --user <name> to specify which user credentials to use"
+    print_color "$BLUE" "  Configure multiple users per environment with --setup."
+    print_color "$BLUE" "  Each user can point to a different vault item."
+    print_color "$BLUE" "  Use --user <name> when connecting."
     echo
     print_color "$BOLD" "PASSWORD MANAGER SUPPORT:"
-    echo "  Supports both 1Password and Bitwarden"
-    echo "  Auto-detects available password managers"
-    echo "  Use --password-manager to override saved preference"
+    print_color "$BLUE" "  Supports 1Password and Bitwarden."
+    print_color "$BLUE" "  Auto-detects installed CLIs, or use --password-manager to override."
     echo
 }
 
@@ -1140,13 +1535,14 @@ get_vault_name() {
         if [ -n "${OP_ITEM_PATTERNS[$vault_key]:-}" ]; then
             echo "${OP_ITEM_PATTERNS[$vault_key]}"
         else
-            print_color "$RED" "❌ User '$user' not configured for $env environment"
-            local available_users
-            available_users=$(get_available_users "$env")
-            if [ -n "$available_users" ]; then
-                print_color "$YELLOW" "💡 Available users for $env: $available_users"
+            print_color_error "$RED" "❌ User '$user' not configured for $env environment"
+            local available_users=()
+            mapfile -t available_users < <(get_available_users "$env")
+            if [ ${#available_users[@]} -gt 0 ]; then
+                print_color_error "$YELLOW" "💡 Available users for $env: ${available_users[*]}"
             else
-                print_color "$YELLOW" "💡 No users configured for $env. Run --setup to configure."
+                print_color_error "$YELLOW" "💡 No users configured for $env. Run --setup to configure."
+                print_color_error "$BLUE" "   Config file checked: $CONFIG_FILE"
             fi
             exit 1
         fi
@@ -1155,8 +1551,9 @@ get_vault_name() {
         if [ -n "${OP_ITEM_PATTERNS[$env]:-}" ]; then
             echo "${OP_ITEM_PATTERNS[$env]}"
         else
-            print_color "$RED" "❌ Environment '$env' not configured"
-            print_color "$YELLOW" "💡 Run --setup to configure environments"
+            print_color_error "$RED" "❌ Environment '$env' not configured"
+            print_color_error "$YELLOW" "💡 Run --setup to configure environments"
+            print_color_error "$BLUE" "   Config file checked: $CONFIG_FILE"
             exit 1
         fi
     fi
@@ -1174,17 +1571,17 @@ list_users() {
         exit 1
     fi
     
-    local users
-    users=$(get_available_users "$env")
+    local users=()
+    mapfile -t users < <(get_available_users "$env")
     
-    if [ -n "$users" ]; then
+    if [ ${#users[@]} -gt 0 ]; then
         print_color "$CYAN" "Available users for $env environment:"
-        for user in $users; do
+        for user in "${users[@]}"; do
             local vault_name
             if [ "$user" = "default" ]; then
                 vault_name="${OP_ITEM_PATTERNS[$env]}"
             else
-                vault_name="${OP_ITEM_PATTERNS[$env:$user]}"
+                vault_name="${OP_ITEM_PATTERNS[${env}:$user]}"
             fi
             print_color "$YELLOW" "  • $user: '$vault_name'"
         done
@@ -1198,6 +1595,7 @@ list_users() {
 # Main function
 #######################################
 main() {
+    local original_args=("$@")
     local environment=""
     local user=""
     local use_main=false
@@ -1247,6 +1645,10 @@ main() {
                 fast_mode=true
                 shift
                 ;;
+            --clear)
+                CLEAR_SCREEN=true
+                shift
+                ;;
             --password-manager|--pm)
                 if [ -n "${2:-}" ]; then
                     password_manager_override="$2"
@@ -1276,6 +1678,8 @@ main() {
                 ;;
         esac
     done
+
+    read_config
     
     # Handle list users
     if [ "$list_users_flag" = true ]; then
@@ -1294,6 +1698,7 @@ main() {
     # Show banner (unless in fast mode)
     if [ "$fast_mode" = false ]; then
         show_banner
+        show_invocation "${original_args[@]}"
     fi
     
     # Get vault name for user
@@ -1311,7 +1716,7 @@ main() {
     signin_password_manager "$password_manager"
     
     # Load credentials from vault
-    fast_mode="$fast_mode" load_credentials "$vault_name" "$password_manager"
+    load_credentials "$vault_name" "$password_manager" "$fast_mode"
     
     if [ "$dry_run" = true ]; then
         show_connection_details "$environment" "$user" "$vault_name" "$use_main" "$connect_db"
