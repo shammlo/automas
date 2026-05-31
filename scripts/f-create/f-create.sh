@@ -1,6 +1,7 @@
 #!/bin/bash
 #
 # Description: Smart file and directory creator with auto-content, templates, and undo functionality
+set -euo pipefail
 
 # Colors and emojis for better output
 RED='\033[0;31m'
@@ -14,9 +15,9 @@ NC='\033[0m' # No Color
 # Configuration
 MAX_DEPTH=20
 MIN_DISK_SPACE_MB=100
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BACKUP_DIR="$SCRIPT_DIR/.f-create-backups"
-HISTORY_FILE="$SCRIPT_DIR/.f-create-history"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/f-create"
+BACKUP_DIR="$DATA_DIR/backups"
+HISTORY_FILE="$DATA_DIR/history"
 
 # Global variables
 QUIET_MODE=false
@@ -34,14 +35,17 @@ EXTENSIONLESS_FILES=("README" "LICENSE" "CHANGELOG" "Dockerfile" "Makefile" "Vag
 
 # Function to print colored output with emojis
 print_info() {
+    [[ "$QUIET_MODE" == true ]] && return
     echo -e "${BLUE}ℹ️  $1${NC}"
 }
 
 print_success() {
+    [[ "$QUIET_MODE" == true ]] && return
     echo -e "${GREEN}✅ $1${NC}"
 }
 
 print_warning() {
+    [[ "$QUIET_MODE" == true ]] && return
     echo -e "${YELLOW}⚠️  $1${NC}"
 }
 
@@ -50,47 +54,139 @@ print_error() {
 }
 
 print_verbose() {
-    [[ "$VERBOSE_MODE" == true ]] && [[ "$QUIET_MODE" == false ]] && echo -e "${CYAN}🔍 $1${NC}"
+    if [[ "$VERBOSE_MODE" == true ]] && [[ "$QUIET_MODE" == false ]]; then
+        echo -e "${CYAN}🔍 $1${NC}"
+    fi
+
+    return 0
 }
 
 print_progress() {
-    [[ "$QUIET_MODE" == true ]] && return
+    [[ "$QUIET_MODE" == true ]] && return 0
     echo -e "${PURPLE}⏳ $1${NC}"
+}
+
+# Function to prompt for confirmation
+confirm() {
+    local prompt="$1"
+    local answer=""
+
+    if [ ! -t 0 ]; then
+        print_warning "Cannot prompt in a non-interactive shell."
+        return 1
+    fi
+
+    read -r -p "$prompt (y/N): " answer
+    [[ "$answer" =~ ^[Yy]$ ]]
+}
+
+# Function to shell-expand escaped content passed with --content
+expand_content() {
+    printf '%b' "$1"
+}
+
+# Function to create data directory for backups/history
+ensure_data_dir() {
+    mkdir -p "$DATA_DIR"
+}
+
+# Function to check path depth
+check_path_depth() {
+    local path="$1"
+    local normalized="${path#/}"
+    local depth=0
+
+    [[ -z "$normalized" ]] && return 0
+
+    IFS='/' read -r -a parts <<< "$normalized"
+    for part in "${parts[@]}"; do
+        [[ -n "$part" ]] && depth=$((depth + 1))
+    done
+
+    if [ "$depth" -gt "$MAX_DEPTH" ]; then
+        print_error "Path exceeds max depth of $MAX_DEPTH levels: $path"
+        return 1
+    fi
+
+    return 0
+}
+
+# Function to check available disk space
+check_disk_space() {
+    local target_path="$1"
+    local check_path="$target_path"
+    local available_kb
+    local required_kb=$((MIN_DISK_SPACE_MB * 1024))
+
+    while [ ! -e "$check_path" ] && [ "$check_path" != "." ] && [ "$check_path" != "/" ]; do
+        check_path="$(dirname "$check_path")"
+    done
+
+    available_kb="$(df -Pk "$check_path" | awk 'NR==2 {print $4}')"
+
+    if [[ -n "$available_kb" && "$available_kb" -lt "$required_kb" ]]; then
+        print_error "Insufficient disk space: need at least ${MIN_DISK_SPACE_MB}MB available"
+        return 1
+    fi
+
+    return 0
 }
 
 # Function to create directories step by step
 create_directories() {
     local path="$1"
+    local display_path="$path"
     local current_path=""
-    
-    # Split path by '/' and process each directory
-    IFS='/' read -ra DIRS <<< "$path"
-    
-    for dir in "${DIRS[@]}"; do
-        if [ -n "$dir" ]; then
-            if [ -z "$current_path" ]; then
-                current_path="$dir"
+    local prefix=""
+    local part
+    local created_any=false
+    local -a parts
+
+    if [ -d "$path" ]; then
+        print_info "Directory '$path' already exists 📁"
+        return 0
+    fi
+
+    if [ "$DRY_RUN" = true ]; then
+        print_info "[DRY RUN] Would create directory '$path' 📂"
+        return 0
+    fi
+
+    if [[ "$path" == /* ]]; then
+        prefix="/"
+        current_path="/"
+        path="${path#/}"
+    fi
+
+    IFS='/' read -r -a parts <<< "$path"
+    for part in "${parts[@]}"; do
+        [[ -z "$part" ]] && continue
+
+        if [[ "$prefix" == "/" && "$current_path" == "/" ]]; then
+            current_path="/$part"
+        elif [[ -z "$current_path" ]]; then
+            current_path="$part"
+        else
+            current_path="$current_path/$part"
+        fi
+
+        if [ ! -d "$current_path" ]; then
+            if mkdir "$current_path"; then
+                print_success "Created directory '$current_path' 📂"
+                log_operation "CREATE_DIR" "$current_path"
+                created_any=true
+            elif [ -d "$current_path" ]; then
+                print_info "Directory '$current_path' was created by another process 📁"
             else
-                current_path="$current_path/$dir"
-            fi
-            
-            if [ -d "$current_path" ]; then
-                print_info "Directory '$current_path' exists, going inside 📁"
-            else
-                if [ "$DRY_RUN" = true ]; then
-                    print_info "[DRY RUN] Would create directory '$current_path' 📂"
-                else
-                    if mkdir "$current_path" 2>/dev/null; then
-                        print_success "Created directory '$current_path' 📂"
-                        log_operation "CREATE_DIR" "$current_path"
-                    else
-                        print_error "Failed to create directory '$current_path'"
-                        return 1
-                    fi
-                fi
+                print_error "Failed to create directory '$current_path'"
+                return 1
             fi
         fi
     done
+
+    if [ "$created_any" = false ]; then
+        print_info "Directory '$display_path' already exists 📁"
+    fi
     
     return 0
 }
@@ -108,9 +204,7 @@ create_file() {
             return 0
         fi
         
-        read -p "Do you want to overwrite it? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        if ! confirm "Do you want to overwrite it?"; then
             print_info "File creation cancelled by user 🚫"
             return 0
         fi
@@ -144,7 +238,7 @@ create_file() {
     # Create the file with content
     if [ "$DRY_RUN" = true ]; then
         if [ -n "$content" ]; then
-            print_info "[DRY RUN] Would create file '$filepath' with content ($(echo -e "$content" | wc -l) lines) 📝"
+            print_info "[DRY RUN] Would create file '$filepath' with content ($(expand_content "$content" | wc -l) lines) 📝"
         else
             print_info "[DRY RUN] Would create empty file '$filepath' 📝"
         fi
@@ -152,7 +246,7 @@ create_file() {
     fi
     
     if [ -n "$content" ]; then
-        if echo -e "$content" > "$filepath" 2>/dev/null; then
+        if expand_content "$content" > "$filepath"; then
             print_success "Created file '$filepath' with content 📝"
             log_operation "CREATE_FILE" "$filepath"
         else
@@ -160,7 +254,7 @@ create_file() {
             return 1
         fi
     else
-        if touch "$filepath" 2>/dev/null; then
+        if touch "$filepath"; then
             print_success "Created empty file '$filepath' 📝"
             log_operation "CREATE_FILE" "$filepath"
         else
@@ -182,26 +276,56 @@ create_file() {
     if command -v ls &> /dev/null && [ "$VERBOSE_MODE" = true ]; then
         print_info "File details: $(ls -lh "$filepath" | awk '{print $1, $5, $6, $7, $8, $9}')"
     fi
+
+    if [ "$OPEN_EDITOR" = true ]; then
+        open_in_editor "$filepath"
+    fi
     
     return 0
+}
+
+# Function to open a file in the user's editor
+open_in_editor() {
+    local filepath="$1"
+    local editor="${EDITOR:-${VISUAL:-}}"
+
+    if [ -z "$editor" ]; then
+        print_warning "No EDITOR or VISUAL configured; skipping editor open."
+        return 0
+    fi
+
+    print_info "Opening '$filepath' in editor: $editor"
+    "$editor" "$filepath"
 }
 
 # Function to validate file path
 validate_path() {
     local filepath="$1"
     
-    # Check for dangerous characters
-    if [[ "$filepath" =~ \.\. ]]; then
-        print_error "Path contains '..' which could be dangerous!"
-        return 1
-    fi
-    
-    # Check if path is absolute (starts with /)
+    check_path_depth "$filepath" || return 1
+    check_disk_space "$filepath" || return 1
+
     if [[ "$filepath" =~ ^/ ]]; then
         print_warning "Absolute path detected. This will create files outside current directory."
-        read -p "Are you sure you want to continue? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        if [ "$DRY_RUN" = true ]; then
+            print_info "[DRY RUN] Would require confirmation for absolute path."
+            return 0
+        fi
+
+        if ! confirm "Are you sure you want to continue?"; then
+            print_info "Operation cancelled by user 🚫"
+            return 1
+        fi
+    fi
+
+    if [[ "$filepath" =~ (^|/)\.\.(/|$) ]]; then
+        print_warning "Parent directory traversal detected. This may create files outside the current tree."
+        if [ "$DRY_RUN" = true ]; then
+            print_info "[DRY RUN] Would require confirmation for parent directory traversal."
+            return 0
+        fi
+
+        if ! confirm "Are you sure you want to continue?"; then
             print_info "Operation cancelled by user 🚫"
             return 1
         fi
@@ -222,8 +346,10 @@ create_path_and_file() {
     fi
     
     # Get the directory part of the path
-    local directory=$(dirname "$filepath")
-    local filename=$(basename "$filepath")
+    local directory
+    local filename
+    directory=$(dirname "$filepath")
+    filename=$(basename "$filepath")
     
     # Check force type first
     if [ "$FORCE_TYPE" = "dir" ]; then
@@ -250,7 +376,7 @@ create_path_and_file() {
         # Check if it's a known extensionless file
         local is_known_file=false
         for known_file in "${EXTENSIONLESS_FILES[@]}"; do
-            if [[ "$filename" == "$known_file"* ]]; then
+            if [[ "$filename" == "$known_file" ]]; then
                 print_verbose "Detected known extensionless file: $filename"
                 is_known_file=true
                 break
@@ -299,11 +425,12 @@ create_backup() {
         return 0
     fi
     
-    # Create backup directory if it doesn't exist
-    mkdir -p "$BACKUP_DIR"
+    ensure_data_dir
     
-    local timestamp=$(date +"%Y%m%d_%H%M%S")
-    local backup_name="${BACKUP_DIR}/$(basename "$filepath").backup.$timestamp"
+    local timestamp
+    local backup_name
+    timestamp=$(date +"%Y%m%d_%H%M%S")
+    backup_name="${BACKUP_DIR}/$(basename "$filepath").backup.$timestamp"
     
     if cp "$filepath" "$backup_name" 2>/dev/null; then
         print_info "Backup created: $backup_name"
@@ -318,7 +445,10 @@ create_backup() {
 log_operation() {
     local operation="$1"
     local path="$2"
-    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    local timestamp
+
+    ensure_data_dir
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
     
     echo "$timestamp|$BATCH_ID|$operation|$path" >> "$HISTORY_FILE"
     print_verbose "Logged operation: $operation $path (batch: $BATCH_ID)"
@@ -326,8 +456,11 @@ log_operation() {
 
 # Function to log batch start
 log_batch_start() {
-    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    local timestamp
     local paths_count="$1"
+
+    ensure_data_dir
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
     
     echo "$timestamp|$BATCH_ID|BATCH_START|$paths_count" >> "$HISTORY_FILE"
     print_verbose "Started batch $BATCH_ID with $paths_count paths"
@@ -335,9 +468,12 @@ log_batch_start() {
 
 # Function to log batch end
 log_batch_end() {
-    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    local timestamp
     local success_count="$1"
     local total_count="$2"
+
+    ensure_data_dir
+    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
     
     echo "$timestamp|$BATCH_ID|BATCH_END|$success_count/$total_count" >> "$HISTORY_FILE"
     print_verbose "Ended batch $BATCH_ID: $success_count/$total_count successful"
@@ -352,7 +488,7 @@ undo_last_operation() {
     
     # Find the last batch by looking for the most recent BATCH_END
     local last_batch_id=""
-    local batch_operations=()
+    local timestamp batch_id operation path line
     
     # Read the file in reverse to find the last completed batch
     if command -v tac >/dev/null 2>&1; then
@@ -371,11 +507,8 @@ undo_last_operation() {
         done < "$HISTORY_FILE"
         
         for line in "${lines[@]}"; do
-            local timestamp=$(echo "$line" | cut -d'|' -f1)
-            local batch_id=$(echo "$line" | cut -d'|' -f2)
-            local operation=$(echo "$line" | cut -d'|' -f3)
-            local path=$(echo "$line" | cut -d'|' -f4)
-            
+            IFS='|' read -r timestamp batch_id operation path <<< "$line"
+
             if [ "$operation" = "BATCH_END" ]; then
                 last_batch_id="$batch_id"
                 break
@@ -413,11 +546,8 @@ undo_last_operation() {
         done < "$HISTORY_FILE"
         
         for line in "${lines[@]}"; do
-            local timestamp=$(echo "$line" | cut -d'|' -f1)
-            local batch_id=$(echo "$line" | cut -d'|' -f2)
-            local operation=$(echo "$line" | cut -d'|' -f3)
-            local path=$(echo "$line" | cut -d'|' -f4)
-            
+            IFS='|' read -r timestamp batch_id operation path <<< "$line"
+
             if [ "$batch_id" = "$last_batch_id" ]; then
                 if [ "$operation" = "BATCH_START" ]; then
                     batch_info="$path"
@@ -439,8 +569,7 @@ undo_last_operation() {
     # Show what will be undone
     print_info "Operations to undo:"
     for op_info in "${operations_to_undo[@]}"; do
-        local operation=$(echo "$op_info" | cut -d'|' -f1)
-        local path=$(echo "$op_info" | cut -d'|' -f2)
+        IFS='|' read -r operation path <<< "$op_info"
         echo "  - $operation: $path"
     done
     
@@ -449,9 +578,7 @@ undo_last_operation() {
         return 0
     fi
     
-    read -p "Do you want to undo this entire batch? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    if ! confirm "Do you want to undo this entire batch?"; then
         print_info "Undo cancelled by user 🚫"
         return 0
     fi
@@ -461,8 +588,7 @@ undo_last_operation() {
     local undo_total=${#operations_to_undo[@]}
     
     for op_info in "${operations_to_undo[@]}"; do
-        local operation=$(echo "$op_info" | cut -d'|' -f1)
-        local path=$(echo "$op_info" | cut -d'|' -f2)
+        IFS='|' read -r operation path <<< "$op_info"
         
         print_progress "Undoing: $operation $path"
         
@@ -471,52 +597,48 @@ undo_last_operation() {
                 if [ -f "$path" ]; then
                     # Create backup before removing
                     if [ -d "$BACKUP_DIR" ]; then
-                        local backup_name="${BACKUP_DIR}/$(basename "$path").undo.$(date +"%Y%m%d_%H%M%S")"
+                        local backup_name
+                        timestamp=$(date +"%Y%m%d_%H%M%S")
+                        backup_name="${BACKUP_DIR}/$(basename "$path").undo.$timestamp"
                         cp "$path" "$backup_name" 2>/dev/null && print_verbose "Backup created: $backup_name"
                     fi
                     
                     if rm "$path" 2>/dev/null; then
                         print_success "Removed file: $path"
-                        ((undo_success++))
+                        undo_success=$((undo_success + 1))
                     else
                         print_error "Failed to remove file: $path"
                     fi
                 else
                     print_warning "File not found: $path"
-                    ((undo_success++))  # Count as success since it's already gone
+                    undo_success=$((undo_success + 1))  # Count as success since it's already gone
                 fi
                 ;;
             "CREATE_DIR")
                 if [ -d "$path" ]; then
                     if rmdir "$path" 2>/dev/null; then
                         print_success "Removed directory: $path"
-                        ((undo_success++))
+                        undo_success=$((undo_success + 1))
                     else
                         print_warning "Directory not empty or failed to remove: $path"
                         print_info "Use 'rm -rf $path' to force removal if needed"
                     fi
                 else
                     print_warning "Directory not found: $path"
-                    ((undo_success++))  # Count as success since it's already gone
+                    undo_success=$((undo_success + 1))  # Count as success since it's already gone
                 fi
                 ;;
         esac
     done
     
     # Remove all lines belonging to this batch from history
-    if command -v grep >/dev/null 2>&1; then
-        grep -v "|$last_batch_id|" "$HISTORY_FILE" > "${HISTORY_FILE}.tmp" && mv "${HISTORY_FILE}.tmp" "$HISTORY_FILE"
-    else
-        # Fallback method
-        local temp_file="${HISTORY_FILE}.tmp"
-        > "$temp_file"
-        while IFS= read -r line; do
-            if [[ ! "$line" =~ \|$last_batch_id\| ]]; then
-                echo "$line" >> "$temp_file"
-            fi
-        done < "$HISTORY_FILE"
-        mv "$temp_file" "$HISTORY_FILE"
-    fi
+    local temp_file
+    temp_file="$(mktemp)"
+    trap 'rm -f "$temp_file"' ERR RETURN
+
+    awk -F'|' -v batch_id="$last_batch_id" '$2 != batch_id' "$HISTORY_FILE" > "$temp_file"
+    mv "$temp_file" "$HISTORY_FILE"
+    trap - ERR RETURN
     
     print_success "Batch undo completed: $undo_success/$undo_total operations successful! 🎯"
     return 0
@@ -587,8 +709,8 @@ EXTENSIONLESS FILES DETECTED AS FILES:
 CONFIGURATION:
   Max path depth: 20 levels
   Min disk space: 100MB
-  Backup directory: .f-create-backups/
-  History file: .f-create-history
+  Backup directory: $XDG_DATA_HOME/f-create/backups or ~/.local/share/f-create/backups
+  History file: $XDG_DATA_HOME/f-create/history or ~/.local/share/f-create/history
 
 EOF
 }
@@ -602,9 +724,6 @@ main() {
     fi
     
     local filepath
-    
-    # Get the script name (last part of path, useful for aliases)
-    local script_name=$(basename "$0")
     
     # Parse arguments
     local paths=()
@@ -636,6 +755,10 @@ main() {
                 shift
                 ;;
             --content|-c)
+                if [ $# -lt 2 ]; then
+                    print_error "Missing value for $1"
+                    exit 1
+                fi
                 INITIAL_CONTENT="$2"
                 shift 2
                 ;;
@@ -644,6 +767,10 @@ main() {
                 shift
                 ;;
             --chmod)
+                if [ $# -lt 2 ]; then
+                    print_error "Missing value for $1"
+                    exit 1
+                fi
                 SET_PERMISSIONS="$2"
                 shift 2
                 ;;
@@ -690,10 +817,6 @@ main() {
         print_info "🔍 VERBOSE MODE - Showing detailed information"
     fi
     
-    if [ "$QUIET_MODE" = true ]; then
-        print_info "🤫 QUIET MODE - Minimal output"
-    fi
-    
     # Process paths
     local exit_code=0
     local success_count=0
@@ -709,18 +832,20 @@ main() {
         print_info "Batch mode: Processing $total_count paths... (batch: $BATCH_ID)"
         echo
         
+        local item_index=0
         for filepath in "${paths[@]}"; do
-            print_info "[$((success_count + 1))/$total_count] Processing: $filepath"
+            item_index=$((item_index + 1))
+            print_info "[$item_index/$total_count] Processing: $filepath"
             
             if create_path_and_file "$filepath"; then
-                ((success_count++))
+                success_count=$((success_count + 1))
             else
                 print_error "Failed to process: $filepath"
                 exit_code=1
             fi
             
             # Add separator between items (except last)
-            if [ $((success_count + 1)) -le $total_count ]; then
+            if [ "$item_index" -lt "$total_count" ]; then
                 echo
             fi
         done
