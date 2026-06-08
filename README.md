@@ -1,86 +1,164 @@
 # 🤖 automas
 
-Welcome to **automas**, my growing collection of scripts that do all the boring stuff so I don’t have to.  
-Think of it as my personal army of little robots, each one living in its own folder, each one with a job to do.
+Welcome to **automas**, my little shelf of Bash/Python-powered conveniences for the chores I got tired of doing by hand.
+
+It is part toolbox, part command-line junk drawer, part "future me will definitely remember how this works" insurance policy. Each script lives in its own folder with its own README, because chaos is fun only when it is documented.
 
 ## 📂 Structure
 
-Every script has:
+The repo is organized around scripts, not vibes pretending to be scripts:
 
-- Its **own folder** (because sharing is overrated).
-- A **README** that explains what it does and how not to break it.
-- (Sometimes) a **requirements.txt** if it needs fancy extras.
-
-```
-
+```text
 automas/
-│
-├── LICENSE               # Because lawyers say we need one
-├── README.md             # You’re here right now
-├── navigator.sh          # The Script Navigator CLI 🎮
-│
+├── installer.sh            # Installs scripts into ~/.local/bin
+├── navigator.sh            # Menu-driven script browser/runner
 ├── scripts/
-│   ├── script-one/
-│   │   ├── script-one.py
-│   │   ├── README.md
-│   │   └── requirements.txt
-│   │
-│   ├── script-two/
-│   │   ├── script-two.sh
-│   │   └── README.md
-│   │
-│   └── script-three/
-│       ├── script-three.js
-│       └── README.md
-│
-└── docs/                 # (optional) Repo-wide docs, lore, or future plans
-
+│   ├── aetherix/           # Development environment setup orchestrator
+│   ├── dbm/                # PostgreSQL backup/reset/shell helper
+│   ├── f-create/           # File and folder creator with extra horsepower
+│   ├── gssw/               # Git commit signing setup wizard
+│   ├── ngx/                # Local Nginx static-site setup helper
+│   ├── sato/               # Infrastructure/service monitoring app
+│   ├── servault/           # Secure server access manager
+│   └── zsho/               # Zsh + Oh My Zsh setup wizard
+├── LICENSE
+└── README.md               # You are here. Try not to make eye contact.
 ```
 
-## 🧭 Navigator (just for fun)
+## 🚀 Quick Start
 
-Want to feel like you’re hacking into the Matrix? Use the built-in **Script Navigator CLI**:
+Clone it, make the scripts executable, and either run what you need directly or install the script commands into `~/.local/bin`.
+
+```bash
+git clone <this-repo-url>
+cd automas
+chmod +x installer.sh navigator.sh scripts/*/*.sh
+```
+
+Run the menu if you want to browse before touching anything important:
 
 ```bash
 ./navigator.sh
 ```
 
-What it does:
+Install one script:
 
-- Shows you categories and scripts
-- Lets you run them directly from a menu
-- Can even peek at their content or README
-- Adds just enough color to make you feel like a real hacker
+```bash
+./installer.sh dbm
+```
 
-_(Pro tip: If it breaks, don’t panic. That’s part of the fun.)_
+Install everything that follows the `scripts/name/name.sh` pattern:
+
+```bash
+./installer.sh all
+```
+
+After that, assuming `~/.local/bin` is on your `PATH`, you can call things like `dbm`, `ngx`, `zsho`, and friends from anywhere. Very fancy. Basically infrastructure now.
+
+## 🧭 Navigator
+
+The **Automas Navigator** is a tiny interactive CLI for exploring the `scripts/` folders.
+
+```bash
+./navigator.sh
+```
+
+It can:
+
+- Show available script folders
+- List runnable files inside each folder
+- Run Bash, Python, JS, TS, or SQL-ish scripts
+- Open script files, READMEs, or folders from the menu
+- Add enough color to make your terminal feel like it has ambitions
+
+## 📦 Installer
+
+The installer creates symlinks in `~/.local/bin`, so scripts can be run like normal commands.
+
+```bash
+./installer.sh list
+./installer.sh dbm
+./installer.sh all
+./installer.sh -o ngx
+```
+
+Use `-o` / `--override` if an existing shell alias is standing in the doorway wearing sunglasses. The installer backs up your `.zshrc` before removing conflicting aliases, because we are chaotic, not reckless.
 
 ## 🛠️ Scripts
 
-Here’s the lineup of my minions:
+Here is the current lineup of small robots, each with its own personal problems:
 
-- [**script-one**](scripts/script-one) – Does X, Y, Z. Saves me about 17 seconds of life every time I use it.
-- [**script-two**](scripts/script-two) – Automates ABC. If you run it twice, don’t blame me.
-- [**script-three**](scripts/script-three) – Utility for DEF. May or may not summon dark forces.
+| Script | What it does |
+| --- | --- |
+| [**aetherix**](scripts/aetherix) | Orchestrates Linux dev-environment setup: Docker, Nginx, PostgreSQL, shell tools, apps, and other workstation rituals. For when setting up a machine by hand starts to feel like a personality flaw. |
+| [**dbm**](scripts/dbm) | Manages PostgreSQL dev databases: start `psql`, backup, reset, list configs, check connections, and handle credentials without turning your terminal into a secret-leaking confetti cannon. |
+| [**f-create**](scripts/f-create) | Creates files and folders intelligently, with dry-run, undo, batch mode, permissions, and starter content. It is `mkdir` and `touch` after several cups of coffee. |
+| [**gssw**](scripts/gssw) | Sets up Git commit signing with SSH or GPG, generates keys, configures Git, and helps you get those sweet "Verified" commits. |
+| [**ngx**](scripts/ngx) | Creates and manages local Nginx static-site configs with custom domains, SSL, SPA routing, API proxying, dry-run mode, backups, and cleanup. |
+| [**sato**](scripts/sato) | Monitors services and infrastructure with health checks, Docker/systemd awareness, maintenance mode, status UI, and self-healing features. Like a dashboard with opinions. |
+| [**servault**](scripts/servault) | Connects to servers and databases using credentials from 1Password or Bitwarden. For teams that enjoy security and dislike password spreadsheets, as nature intended. |
+| [**zsho**](scripts/zsho) | Installs and configures Zsh, Oh My Zsh, themes, plugins, backups, and default-shell setup. Makes your terminal less beige emotionally. |
 
-_(More to come, because my laziness is infinite.)_
+Each script folder has its own README with examples, requirements, options, and any caveats hiding behind the curtain.
 
-## 🚀 Usage
+## 🧪 Tests
 
-1. Pick a script.
-2. Read its README (seriously, read it — future you will thank you).
-3. Run it.
-4. Brag about how productive you are now.
+Some scripts include their own test runner:
 
-## ⚠️ Disclaimer
+```bash
+./scripts/dbm/test-dbm.sh
+./scripts/f-create/test-f-create.sh
+./scripts/ngx/test-ngx.sh
+./scripts/servault/test-servault.sh
+./scripts/zsho/test-zsho.sh
+```
 
-These scripts work on **my machine™**.  
-If they break yours… consider it character development.
+Not every script has the same test setup yet. This is a toolbox, not a cathedral. A reasonably tidy toolbox, but still.
 
-## 🎉 Contribute?
+## ⚠️ Before You Run Things
 
-This is mostly for me, but if you have ideas, fixes, or just want to make the code less embarrassing, PRs are welcome.
+Some scripts touch real system resources:
+
+- `aetherix` may install packages and configure development tools.
+- `ngx` may modify Nginx configs, SSL files, and `/etc/hosts`.
+- `zsho` may change shell configuration and your default shell.
+- `servault` opens SSH/database sessions.
+- `dbm reset` can replace database contents, which is exciting in the same way a fire alarm is exciting.
+
+Read the script README first, use dry-run modes where available, and do not aim production credentials at random commands just to see what happens. Future you has enough problems.
+
+## 🧑‍🔧 Adding A New Script
+
+To keep the installer and navigator happy, use this shape:
+
+```text
+scripts/
+└── my-script/
+    ├── my-script.sh
+    ├── README.md
+    └── test-my-script.sh      # optional, but appreciated by civilization
+```
+
+Then make it executable:
+
+```bash
+chmod +x scripts/my-script/my-script.sh
+```
+
+If the folder name and main `.sh` file match, `installer.sh` can discover it automatically.
+
+## 🎉 Contributing
+
+This repo is mostly personal automation, but useful fixes, better docs, and "hey, this script almost ate my laptop" reports are welcome.
+
+PRs should try to:
+
+- Keep each script self-contained
+- Update the relevant script README
+- Add or update tests when practical
+- Preserve the mild terminal theatrics, because joy is a feature
 
 ## 📄 License
 
-This repository is licensed under the **MIT License**.  
+This repository is licensed under the **MIT License**.
 See the [LICENSE](./LICENSE) file for details.
