@@ -497,7 +497,11 @@ build_pg_command() {
     fi
     
     # Add extra arguments
-    [[ $# -gt 0 ]] && PG_CMD+=("$@")
+    if [[ $# -gt 0 ]]; then
+        PG_CMD+=("$@")
+    fi
+
+    return 0
 }
 
 build_pg_env() {
