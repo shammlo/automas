@@ -1,257 +1,269 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# UI Library - User interface and display functions
+usage() {
+    cat << EOF
+🚀 Aetherix Alchemy
 
-# Color and styling functions
-ui_success() {
-    gum style --foreground 2 "✅ $1"
+Transform a fresh Ubuntu machine into a ready development workstation.
+
+Usage:
+  alchemy [options]
+  aetherix.sh [options]
+
+Interactive mode is the default.
+
+Options:
+  --all          Install all workstation categories
+  --core         Install core development tools
+  --terminal     Install terminal tools and shell setup
+  --docker       Install Docker and Docker Compose
+  --android      Install Android development tooling
+  --flutter      Install Flutter and Android integration
+  --apps         Install workstation applications
+  --postgres     Install PostgreSQL client/server flow
+  --nginx        Install and enable Nginx
+  --gnome        Install GNOME enhancements
+  --profile NAME Use a predefined profile
+  --list-profiles
+                 Show available profiles
+  --no-gum       Use native Bash prompts even if Gum is installed
+  --dry-run      Print actions without changing the system
+  --skip-preflight
+                 Skip system checks before installation
+  --health       Run post-install health checks in non-interactive mode
+  -h, --help     Show this help
+
+Profiles:
+  minimal, web, devops, fullstack, workstation, zoth
+
+Example:
+  alchemy --profile zoth
+
+Logs:
+  $LOG_FILE
+EOF
 }
 
-ui_error() {
-    gum style --foreground 1 "❌ $1"
+confirm_native() {
+    local prompt="$1"
+    local default_yes="${2:-true}"
+    local answer
+    local suffix="[Y/n]"
+
+    [ "$default_yes" = false ] && suffix="[y/N]"
+    if ! is_tty; then
+        [ "$default_yes" = true ]
+        return $?
+    fi
+
+    read -r -p "$prompt $suffix " answer
+    case "$answer" in
+        y|Y|yes|YES) return 0 ;;
+        n|N|no|NO) return 1 ;;
+        "") [ "$default_yes" = true ] ;;
+        *) return 1 ;;
+    esac
 }
 
-ui_warning() {
-    gum style --foreground 3 "⚠️  $1"
+gum_confirm() {
+    local prompt="$1"
+    local default_yes="${2:-true}"
+
+    if [ "$USE_GUM" = true ]; then
+        if [ "$default_yes" = true ]; then
+            gum confirm "$prompt"
+        else
+            gum confirm --default=false "$prompt"
+        fi
+    else
+        confirm_native "$prompt" "$default_yes"
+    fi
 }
 
-ui_info() {
-    gum style --foreground 45 "$1"
+install_gum() {
+    if command_exists gum; then
+        success "Gum already installed"
+        USE_GUM=true
+        return 0
+    fi
+
+    section "🍬 Installing Gum"
+    apt_install curl ca-certificates gnupg
+    run_cmd sudo mkdir -p /etc/apt/keyrings
+
+    if [ "$DRY_RUN" = true ]; then
+        color "$PURPLE" "🧪 DRY RUN: would add Charm apt repository and install gum"
+        return 0
+    fi
+
+    curl -fsSL https://repo.charm.sh/apt/gpg.key |
+        sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
+    printf '%s\n' 'deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *' |
+        sudo tee /etc/apt/sources.list.d/charm.list >/dev/null
+    APT_UPDATED=false
+    apt_install gum
+
+    if command_exists gum; then
+        USE_GUM=true
+        success "Gum installed"
+    else
+        warn "Gum installation did not complete; continuing with native prompts"
+        USE_GUM=false
+    fi
 }
 
-ui_dry_run() {
-    gum style --foreground 3 "🧪 [DRY RUN] $1"
+setup_gum() {
+    if [ "$NO_GUM" = true ]; then
+        USE_GUM=false
+        return 0
+    fi
+
+    if command_exists gum; then
+        USE_GUM=true
+        return 0
+    fi
+
+    color "$CYAN" "🚀 Welcome to Aetherix Alchemy"
+    echo
+    echo "Gum was not found."
+
+    if ! is_tty || [ "$NON_INTERACTIVE" = true ]; then
+        warn "Continuing with native Bash prompts."
+        USE_GUM=false
+        return 0
+    fi
+
+    if confirm_native "Install Gum for a better interactive UI?" true; then
+        install_gum
+    else
+        warn "Continuing with native Bash prompts."
+        USE_GUM=false
+    fi
 }
 
-# Display header
-show_header() {
-    gum style \
-        --foreground 212 --border-foreground 212 --border double \
-        --align center --width 80 --margin "1 2" --padding "1 2" \
-        "👽 AWAKENING THE ALTARS: NICRONIAN SYSTEM PREPARATION 🌠"
+selected_has() {
+    local wanted="$1"
+    local item
 
-    gum style --foreground 7 "👽🪐🌌 Welcome, traveler. You have arrived on Nicron, a sacred planet where the ancient race of the Nicronians will guide you in preparing your environment. Through the essence of the Creator's light, we shall install Docker, PostgreSQL, Nginx, Zsh, and other tools essential for your path ahead."
-    echo ""
+    for item in "${SELECTED[@]}"; do
+        [ "$item" = "$wanted" ] && return 0
+    done
+    return 1
 }
 
-# Show configuration summary
-show_summary() {
-    ui_info "📝 Components selected:"
-    for item in "${SELECTIONS[@]}"; do
-        ui_success "   └── • $item"
+select_category() {
+    local category="$1"
+
+    selected_has "$category" && return 0
+    SELECTED+=("$category")
+}
+
+select_all_categories() {
+    local category
+
+    SELECTED=()
+    for category in "${CATEGORY_ORDER[@]}"; do
+        select_category "$category"
     done
 }
 
-# Show installation preview
-show_installation_preview() {
-    echo ""
-    gum style --border double --margin "1 0" --padding "1 2" --foreground 45 "📋 Detailed Installation Preview"
-    
-    # Component details table
-    ui_info "📦 Components to install: ${#SELECTIONS[@]}"
-    echo ""
-    gum style --foreground 6 --bold "Component                Size      Time      Description"
-    gum style --foreground 7 "─────────────────────────────────────────────────────────────────"
-    
-    for component in "${SELECTIONS[@]}"; do
-        local size=$(get_component_size "$component")
-        local time=$(get_component_install_time "$component")
-        local desc=""
-        
-        case "$component" in
-            "docker") desc="Container platform" ;;
-            "nginx") desc="Web server" ;;
-            "psql") desc="Database system" ;;
-            "zsh") desc="Modern shell" ;;
-            "vim") desc="Text editor" ;;
-            "apps") desc="Development tools" ;;
-            "monitoring") desc="System monitoring" ;;
-            "dev_env") desc="Programming languages" ;;
-            "scripts") desc="Automation scripts" ;;
-        esac
-        
-        printf "%-20s %-9s %-9s %s\n" "$component" "$size" "$time" "$desc" | gum style --foreground 2
+select_defaults() {
+    SELECTED=()
+    select_category core
+    select_category terminal
+    select_category shell
+    select_category docker
+    select_category gnome
+}
+
+interactive_menu_gum() {
+    local labels=()
+    local selected_args=()
+    local category
+    local label
+
+    for category in "${CATEGORY_ORDER[@]}"; do
+        label="${CATEGORY_LABELS[$category]}"
+        labels+=("$label")
+        if [ "${DEFAULT_SELECTED[$category]:-false}" = true ]; then
+            selected_args+=(--selected "$label")
+        fi
     done
-    
-    echo ""
-    gum style --foreground 7 "─────────────────────────────────────────────────────────────────"
-    
-    # Summary information
-    local total_size=$(calculate_total_size)
-    local total_time=$(calculate_total_time)
-    local network_speed=$(get_network_speed)
-    
-    ui_info "📊 Installation Summary:"
-    gum style --foreground 45 "  • Total Size: $total_size"
-    gum style --foreground 45 "  • Estimated Time: $total_time"
-    gum style --foreground 45 "  • Network Speed: $network_speed"
-    gum style --foreground 45 "  • Installation Log: $LOG_FILE"
-    
-    # System requirements check
-    echo ""
-    ui_info "🖥️  System Requirements:"
-    local available_space=$(df / | awk 'NR==2 {printf "%.1fGB", $4/1024/1024}')
-    local available_memory=$(free -h | awk '/^Mem:/ {print $7}')
-    
-    gum style --foreground 3 "  • Available Disk Space: $available_space"
-    gum style --foreground 3 "  • Available Memory: $available_memory"
-    
-    # Warnings and recommendations
-    echo ""
-    ui_info "⚠️  Important Notes:"
-    gum style --foreground 3 "  • Installation requires sudo privileges"
-    gum style --foreground 3 "  • Some components may require logout/login"
-    gum style --foreground 3 "  • Network connection required for downloads"
-    
-    if [[ " ${SELECTIONS[*]} " =~ "docker" ]]; then
-        gum style --foreground 3 "  • Docker requires user group changes (logout needed)"
-    fi
-    
-    if [[ " ${SELECTIONS[*]} " =~ "zsh" ]] && [ "$ZSH_DEFAULT" = true ]; then
-        gum style --foreground 3 "  • Zsh will become your default shell"
-    fi
-    
-    echo ""
-}
 
-# Show spacer
-show_spacer() {
-    gum style --foreground 7 "        "
-}
-
-# Print section title
-print_section_title() {
-    local title="$1"
-    gum style --border double --margin "1 0" --padding "0 2" --foreground 212 "🔹 $title"
-}
-
-# Print success box
-print_success_box() {
-    local message="$1"
-    gum style --border normal --margin "1 0" --padding "0 2" --foreground 2 "✅ $message"
-}
-
-# Print error box
-print_error_box() {
-    local message="$1"
-    gum style --border normal --margin "1 0" --padding "0 2" --foreground 1 "❌ $message"
-}
-
-# Show multi-choice selection with formatting
-show_multi_choice() {
-    local title="$1"
-    local -n options_ref=$2
-    local -n selected_ref=$3
-    
-    ui_info "$title"
-    
-    # Store the output in an array
-    readarray -t selected_array < <(gum choose --no-limit "${options_ref[@]}")
-    
-    # Convert the array to a space-separated string
-    selected_ref=$(printf "%s " "${selected_array[@]}")
-    
-    # Handle the "All" option
-    if [[ "$selected_ref" == *"All"* ]]; then
-        # Remove "All" from the array and add all other options
-        local all_options=""
-        for option in "${options_ref[@]}"; do
-            if [ "$option" != "All" ]; then
-                all_options+="$option "
-            fi
+    labels=$(gum choose --no-limit --cursor="→ " --selected-prefix="[✓] " --unselected-prefix="[ ] " "${selected_args[@]}" "${labels[@]}")
+    SELECTED=()
+    while IFS= read -r label; do
+        [ -n "$label" ] || continue
+        for category in "${CATEGORY_ORDER[@]}"; do
+            [ "${CATEGORY_LABELS[$category]}" = "$label" ] && select_category "$category"
         done
-        selected_ref="$all_options"
-    fi
+    done <<< "$labels"
 }
 
-# Show component configuration details (deprecated - now shown inline)
-show_component_details() {
-    # This function is kept for backward compatibility but is no longer used
-    # Details are now shown inline during configuration
-    return 0
-}
-
-# Show final summary
-show_final_summary() {
-    local end_time=$(date +%s)
-    local elapsed=$((end_time - START_TIME))
-
-    echo ""
-    gum style --foreground 6 --bold "📦 Installation Summary"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✅ Completed:  $COMPLETED_COMPONENTS / $TOTAL_COMPONENTS"
-    echo "❌ Failed:     $FAILED_COMPONENTS"
-    echo "⏭️  Skipped:    $SKIPPED_COMPONENTS"
-    echo "🕒 Duration:   ${elapsed}s"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    
-    if [ ${#FAILED_LIST[@]} -gt 0 ]; then
-        echo "Failed components:"
-        for failed in "${FAILED_LIST[@]}"; do
-            echo "  - $failed"
-        done
-    fi
-}
-
-# Show post-install dashboard
-show_post_install_dashboard() {
-    local choices=(
-        "🔁 Retry Failed Components" 
-        "🏥 Run Health Check" 
-        "📊 Generate Report"
-        "📋 Manage Templates"
-        "🔙 Rollback Installation"
-        "📂 Open Config Folder" 
-        "📄 View Log File" 
-        "❌ Exit"
-    )
+interactive_menu_native() {
+    local category
+    local index=1
+    local answer
     local choice
+    local choices=()
 
-    while true; do
-        choice=$(gum choose --header="🎛️ What would you like to do next?" "${choices[@]}")
+    color "$CYAN" "What would you like to install?"
+    echo
+    for category in "${CATEGORY_ORDER[@]}"; do
+        local checked="[ ]"
+        [ "${DEFAULT_SELECTED[$category]:-false}" = true ] && checked="[✓]"
+        printf "%2d) %s %s\n" "$index" "$checked" "${CATEGORY_LABELS[$category]}"
+        index=$((index + 1))
+    done
 
-        case "$choice" in
-        "🔁 Retry Failed Components")
-            retry_failed_components
-            ;;
-        "🏥 Run Health Check")
-            run_health_check
-            ;;
-        "📊 Generate Report")
-            generate_health_report
-            ui_info "Report generated successfully!"
-            ;;
-        "📋 Manage Templates")
-            manage_templates
-            ;;
-        "🔙 Rollback Installation")
-            show_rollback_menu
-            ;;
-        "📂 Open Config Folder")
-            xdg-open "$CONFIG_DIR" >/dev/null 2>&1 || echo "📂 Config path: $CONFIG_DIR"
-            ;;
-        "📄 View Log File")
-            gum pager <"$LOG_FILE"
-            ;;
-        "❌ Exit")
-            echo "👋 Exiting. May the Source be with you!"
-            break
-            ;;
-        esac
+    echo
+    echo "Enter numbers separated by commas, 'all', or press Enter for defaults."
+    read -r -p "Selection: " answer
+
+    case "$answer" in
+        "") select_defaults; return 0 ;;
+        all|ALL) select_all_categories; return 0 ;;
+    esac
+
+    IFS=',' read -r -a choices <<< "$answer"
+    SELECTED=()
+    for choice in "${choices[@]}"; do
+        choice="${choice//[[:space:]]/}"
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#CATEGORY_ORDER[@]}" ]; then
+            select_category "${CATEGORY_ORDER[$((choice - 1))]}"
+        else
+            warn "Ignoring invalid selection: $choice"
+        fi
     done
 }
 
-# Retry failed components
-retry_failed_components() {
-    if [ ${#FAILED_LIST[@]} -eq 0 ]; then
-        ui_info "No failed components to retry"
-        return
+interactive_menu() {
+    color "$CYAN" "🚀 Aetherix Alchemy"
+    echo
+    echo "Transform this fresh Ubuntu machine into a ready development workstation."
+    echo
+
+    if [ "$USE_GUM" = true ]; then
+        interactive_menu_gum
+    else
+        interactive_menu_native
     fi
-    
-    ui_info "Retrying failed components..."
-    for component in "${FAILED_LIST[@]}"; do
-        ui_info "Retrying $component..."
-        # This would call the appropriate installer function
-        # install_${component,,}
+
+    if [ ${#SELECTED[@]} -eq 0 ]; then
+        warn "No categories selected."
+        exit 0
+    fi
+
+    echo
+    color "$BLUE" "Selected:"
+    local category
+    for category in "${SELECTED[@]}"; do
+        echo "  ✓ ${CATEGORY_LABELS[$category]}"
     done
+    echo
+
+    if ! gum_confirm "Continue?" true; then
+        warn "Alchemy cancelled."
+        exit 0
+    fi
 }
